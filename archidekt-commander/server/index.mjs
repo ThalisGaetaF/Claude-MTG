@@ -22,10 +22,10 @@ startMcpServer({
   version: VERSION,
   instructions:
     'Ferramentas para ler e editar decks e a coleção do usuário no Archidekt (API não oficial, ~40 req/min), ' +
-    'cache local de cartas (Scryfall) com nomes em português, preços em reais (LigaMagic), análise profunda de decks ' +
-    '(deck_analyze → deck_cut_candidates → deck_upgrade_candidates), triangulação de cada carta com o EDHREC (deck_triangulate), ' +
-    'otimizador algorítmico com simulação Monte Carlo (deck_optimize → revisar → deck_optimize_apply após o "sim"; deck_simulate), ' +
-    'snapshots e uma wiki pessoal em Markdown. ' +
+    'banco local de cartas (Scryfall) com nomes em português, preços em reais (LigaMagic, sempre ao vivo), ' +
+    'análise completa de decks com opções de melhoria testadas em simulação (deck_analyze → deck_optimize_apply após o "sim"), ' +
+    'avaliação de cada carta (deck_triangulate), otimizador algorítmico (deck_optimize) e simulação Monte Carlo (deck_simulate). ' +
+    'A análise é sempre feita do zero: nada de análises, planos ou snapshots anteriores é lido ou gravado. ' +
     'Leia antes de escrever, peça confirmação antes de mudanças, nunca repita escritas às cegas e confira o campo "verification".',
   tools: buildTools(client),
   log,

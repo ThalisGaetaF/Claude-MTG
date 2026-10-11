@@ -1,6 +1,7 @@
 // Minimal MCP server over stdio: newline-delimited JSON-RPC 2.0. Logs go to stderr only.
 
 import readline from 'node:readline';
+import { withCallScope } from './store.mjs';
 
 const SUPPORTED_PROTOCOLS = ['2025-11-25', '2025-06-18', '2025-03-26', '2024-11-05'];
 const DEFAULT_PROTOCOL = '2025-06-18';
@@ -47,7 +48,7 @@ export function startMcpServer({ name, version, instructions, tools, log }) {
         if (!tool) return fail(id, -32602, `Unknown tool: ${params?.name}`);
         let result;
         try {
-          const text = await tool.handler(params.arguments || {});
+          const text = await withCallScope(() => tool.handler(params.arguments || {}));
           result = { content: [{ type: 'text', text: typeof text === 'string' ? text : JSON.stringify(text, null, 1) }] };
         } catch (e) {
           if (!(e && e.kind)) log(`tool ${tool.name} crashed: ${e?.stack || e}`);

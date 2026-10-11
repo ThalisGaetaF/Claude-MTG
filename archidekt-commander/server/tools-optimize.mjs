@@ -1,23 +1,20 @@
-// v0.3 tools: EDHREC triangulation per card, deck optimizer (local search + Monte Carlo goldfish),
-// apply-after-approval, and the goldfish simulator on its own.
+// Tools: per-card evaluation (own model + EDHREC reference), deck optimizer (local search + Monte Carlo
+// goldfish), apply-after-approval, and the goldfish simulator on its own.
+// Nothing is stored between calls: deck_optimize returns its swaps and deck_optimize_apply receives them back.
 
-import fs from 'node:fs';
-import path from 'node:path';
-import { cardInfo, heuristicSynergy, rolePt, ROLE_TARGETS } from './analysis.mjs';
+import { cardInfo, rolePt } from './analysis.mjs';
 import { findCard, getCache, ptNameOf, resolveLocal, startUpdate } from './cache.mjs';
 import { deckIdentityOf, withinIdentity } from './commander.mjs';
 import * as liga from './ligamagic.mjs';
 import { optimize, replay, roleTargets } from './optimizer.mjs';
-import { goldfish, goldfishScore, simCard } from './simulate.mjs';
-import { dataDir, envInt, fileStamp, normName, readJson, ToolError, writeJson } from './store.mjs';
-import { bracketProblem, combosWith, evaluate, fetchCardPages, infoFromRecord, loadContext, MODE_ALIASES, triangulateDeck, VERDICT_PT } from './triangulate.mjs';
-import * as wiki from './wiki.mjs';
+import { envInt, normName, ToolError } from './store.mjs';
+import { avgRoleCounts, candidatePool, simulateInfos } from './improve.mjs';
+import { fetchCardPages, infoFromRecord, loadContext, MODE_ALIASES, triangulateDeck, VERDICT_PT } from './triangulate.mjs';
 
 const RO = { readOnlyHint: true, openWorldHint: true };
 const WRITE = { readOnlyHint: false, destructiveHint: true, openWorldHint: true };
 const inputError = (m) => new ToolError('input', m);
 const budgetMs = () => envInt('ARCHIDEKT_TOOL_BUDGET_MS', 40_000);
-const ciSubset = (cardCi, deckCi) => withinIdentity(cardCi, deckCi || 'C');
 
 function intArg(v, field, { min = 1, max = 1e10, dflt } = {}) {
   if (v === undefined || v === null) {
@@ -34,27 +31,6 @@ function modeArg(m) {
   const v = MODE_ALIASES[String(m).trim().toLowerCase()];
   if (!v) throw inputError('mode deve ser "equilibrio", "forca" ou "tema".');
   return v;
-}
-
-const plansDir = (deckId) => dataDir('plans', String(Number(deckId)));
-
-function savePlan(plan) {
-  const id = fileStamp();
-  writeJson(path.join(plansDir(plan.deckId), `${id}.json`), { planId: id, ...plan }, { pretty: true });
-  return id;
-}
-
-function loadPlan(deckId, planId) {
-  let names = [];
-  try {
-    names = fs.readdirSync(plansDir(deckId)).filter((f) => f.endsWith('.json')).sort();
-  } catch {
-    /* none */
-  }
-  if (!names.length) throw new ToolError('not_found', `Nenhum plano salvo para o deck ${deckId}. Rode deck_optimize primeiro.`);
-  const file = !planId || planId === 'latest' ? names[names.length - 1] : names.find((f) => f === `${planId}.json`);
-  if (!file) throw new ToolError('not_found', `Plano "${planId}" não existe. Disponíveis: ${names.slice(-5).map((f) => f.replace(/\.json$/, '')).join(', ')}`);
-  return readJson(path.join(plansDir(deckId), file));
 }
 
 /** Short PT summary of a triangulated card. */
@@ -76,6 +52,29 @@ function afterInfos(entries, swaps) {
     m.set(s.in.k, [s.in.info, 1]);
   }
   return [...m.values()];
+}
+
+const ROLE_CATS = { ramp: ['ramp'], draw: ['draw', 'card draw', 'card advantage', 'compra'], removal: ['removal', 'remocao'], wipe: ['board wipe', 'wipe', 'wipes', 'removal'], protection: ['protection', 'protecao'], recursion: ['recursion', 'recursao'], tokens: ['tokens'], landfall: ['landfall'], 'sac-outlet': ['sac outlet', 'sacrifice'], counter: ['counterspell', 'counters'], tutor: ['tutor', 'tutors'] };
+
+/**
+ * Category for a card that comes into the deck: lands go with the deck's lands; other cards go to a deck
+ * category named after their main role, else to the category of the card that leaves.
+ */
+export function categoryFor(deck, outName, inInfo) {
+  const catOf = (n) => deck.rows.find((r) => r.included && normName(r.name) === normName(n))?.category ?? null;
+  const outRow = deck.rows.find((r) => r.included && normName(r.name) === normName(outName));
+  const outIsLand = /\bland\b/i.test(String(outRow?.type || '').split('—')[0]);
+  if (inInfo?.isLand) {
+    const landCat = deck.rows.find((r) => r.included && /\bland\b/i.test(String(r.type).split('—')[0]) && !r.isCommander)?.category ?? null;
+    return landCat || (outIsLand ? catOf(outName) : null);
+  }
+  const deckCats = new Map(deck.categories.filter((c) => c.included && !c.premier).map((c) => [normName(c.name), c.name]));
+  const roles = inInfo?.roles instanceof Set ? inInfo.roles : new Set(inInfo?.roles || []);
+  for (const r of ['ramp', 'draw', 'removal', 'wipe', 'protection', 'recursion', 'tutor', 'landfall', 'tokens', 'sac-outlet']) {
+    if (!roles.has(r)) continue;
+    for (const n of ROLE_CATS[r] || []) if (deckCats.has(n)) return deckCats.get(n);
+  }
+  return outIsLand ? null : catOf(outName);
 }
 
 /** ctx: {client, getDeck, ownedRecords, applyDeckChanges} from tools.mjs */
@@ -119,97 +118,7 @@ export function buildOptimizeTools(ctxTools) {
     };
   }
 
-  /**
-   * Candidate pool from several sources, so EDHREC is not the only way in: EDHREC lists (commander, theme,
-   * bracket, average deck) + local cache search for roles below target + cheap ramp/draw/interaction that make
-   * the deck flow + cards whose text matches the commander's themes. Every candidate must be inside the
-   * commander's color identity (hard rule), Commander-legal and inside the target bracket.
-   */
-  function candidatePool(deck, ctx, tri, { mode, targetBracket, deckCi }) {
-    const cache = getCache();
-    const have = tri.have;
-    const names = new Map();
-    const add = (n, src) => {
-      const k = normName(n);
-      if (have.has(k)) return;
-      if (!names.has(k)) names.set(k, { name: n, sources: new Set() });
-      names.get(k).sources.add(src);
-    };
-    if (ctx.base.found) for (const c of ctx.base.cards.values()) add(c.name, 'EDHREC comandante');
-    if (ctx.theme) for (const c of ctx.theme.page.cards.values()) add(c.name, `EDHREC tema ${ctx.theme.slug}`);
-    if (ctx.bracket) for (const c of ctx.bracket.page.cards.values()) add(c.name, `EDHREC bracket ${ctx.bracket.bracket}`);
-    if (ctx.avg) for (const c of ctx.avg.cards.values()) add(c.name, 'deck médio');
-    // roles below target in the current deck → best-ranked cards of that role in the colors
-    const counts = {};
-    for (const [, info] of tri.infos) for (const r of info.roles) if (!info.isLand) counts[r] = (counts[r] || 0) + info.qty;
-    if (cache?.hasCards) {
-      for (const [role, [min]] of Object.entries(ROLE_TARGETS)) {
-        if (!min || (counts[role] || 0) >= min) continue;
-        cache.list
-          .filter((c) => c.roles.includes(role) && c.legal === 'legal' && ciSubset(c.ci, deckCi) && !have.has(normName(c.name)) && !/\bland\b/i.test(c.type.split('//')[0]))
-          .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9))
-          .slice(0, 20)
-          .forEach((c) => add(c.name, `cache: ${rolePt(role)}`));
-      }
-      const nonlandOk = (c) => c.legal === 'legal' && ciSubset(c.ci, deckCi) && !have.has(normName(c.name)) && !/\bland\b/i.test(String(c.type).split('//')[0]);
-      // fluidity: the best cheap ramp, card draw and interaction in the colors (fill early turns, keep cards flowing)
-      for (const role of ['ramp', 'draw', 'removal']) {
-        cache.list
-          .filter((c) => nonlandOk(c) && c.roles.includes(role) && Number(c.mv) <= 2)
-          .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9))
-          .slice(0, 12)
-          .forEach((c) => add(c.name, `cache: ${rolePt(role)} barato (fluidez)`));
-      }
-      // own synergy: cards whose text matches the commander's themes, even if EDHREC does not list them
-      if (tri.th.themes.length) {
-        cache.list
-          .filter((c) => nonlandOk(c) && Number(c.mv) <= 5)
-          .map((c) => ({ c, h: heuristicSynergy({ text: c.text || '', typeLine: c.type || '', roles: new Set(c.roles || []), subtypes: [] }, tri.th) }))
-          .filter((x) => x.h >= 0.5)
-          .sort((a, b) => b.h - a.h || (a.c.rank ?? 1e9) - (b.c.rank ?? 1e9))
-          .slice(0, 30)
-          .forEach(({ c }) => add(c.name, `cache: sinergia de texto (${tri.th.themes.join('/')})`));
-      }
-    }
-    const out = [];
-    const rejected = { unknown: 0, color: 0, legality: 0, bracket: 0, combo: 0 };
-    for (const { name, sources } of names.values()) {
-      const rec = findCard(name);
-      if (!rec) {
-        rejected.unknown++;
-        continue;
-      }
-      if (rec.legal !== 'legal') {
-        rejected.legality++;
-        continue;
-      }
-      if (rec.ci == null || !ciSubset(rec.ci, deckCi)) {
-        rejected.color++;
-        continue;
-      }
-      const info = infoFromRecord(rec);
-      if (bracketProblem(info, targetBracket)) {
-        rejected.bracket++;
-        continue;
-      }
-      const k = normName(rec.name);
-      if (targetBracket && targetBracket <= 2 && combosWith(k, ctx, new Set([...have, k])).length) {
-        rejected.combo++;
-        continue;
-      }
-      const ev = evaluate(info, ctx, tri.th, { mode, targetBracket, have: new Set([...have, k]) });
-      out.push({ info, eval: ev, sources: [...sources] });
-    }
-    return { candidates: out, rejected };
-  }
-
-  function simulate(infos, commanderInfo, identity, { games = 2000, seed = 42 } = {}) {
-    const cards = [];
-    for (const info of infos) for (let i = 0; i < Math.max(1, info.qty || 1); i++) cards.push(simCard(info, identity));
-    const cmd = commanderInfo ? simCard(commanderInfo, identity) : null;
-    const r = goldfish(cards, cmd, { games, seed, identity });
-    return { ...r, score: goldfishScore(r) };
-  }
+  const simulate = (infos, commanderInfo, identity, opts) => simulateInfos(infos, commanderInfo, identity, opts);
 
   function commanderInfoOf(deck) {
     const c = deck.commanders[0];
@@ -233,7 +142,7 @@ export function buildOptimizeTools(ctxTools) {
   const triangulateTool = {
     name: 'deck_triangulate',
     description:
-      'Avalia CADA carta do deck com um modelo próprio — função (ramp/compra/remoção…), custo de mana, FLUIDEZ (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sinergia de texto com o comandante — e usa o EDHREC só como referência (comandante, tema detectado, bracket, deck médio e popularidade global contam como um único voto e ~20% do valor). Devolve para cada carta: valor 0–100, nota do modelo próprio, veredito (núcleo, sinergia, staple/função, aposta pessoal, duvidosa, corte provável), confiança (quantas fontes concordam) e os motivos. O EDHREC sozinho nunca manda cortar uma carta. deep=true busca a página individual das cartas duvidosas no EDHREC (≈1 s cada, em cache 7 dias).',
+      'Avalia CADA carta do deck com um modelo próprio — função (ramp/compra/remoção…), custo de mana, FLUIDEZ (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sinergia de texto com o comandante — e usa o EDHREC só como referência (comandante, tema detectado, bracket, deck médio e popularidade global contam como um único voto e ~20% do valor). Devolve para cada carta: valor 0–100, nota do modelo próprio, veredito (núcleo, sinergia, staple/função, aposta pessoal, duvidosa, corte provável), confiança (quantas fontes concordam) e os motivos. O EDHREC sozinho nunca manda cortar uma carta. deep=true busca a página individual das cartas duvidosas no EDHREC (≈1 s cada, sempre ao vivo — nada fica em cache entre chamadas).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -259,7 +168,7 @@ export function buildOptimizeTools(ctxTools) {
       const nonland = tri.cards.filter((c) => !c.isLand);
       const notes = [...ctx.notes];
       if (!getCache()?.hasCards) notes.push('Cache local de cartas ausente: funções e rank vêm só do Archidekt/texto (rode cards_cache_update).');
-      if (deepInfo?.skipped) notes.push(`${deepInfo.skipped} página(s) de carta do EDHREC ficaram para a próxima chamada (limite de tempo); repita para completar — o que já veio fica em cache.`);
+      if (deepInfo?.skipped) notes.push(`${deepInfo.skipped} página(s) de carta do EDHREC não foram consultadas (limite de tempo da chamada).`);
       const counts = Object.fromEntries(Object.entries(tri.counts).map(([k, v]) => [VERDICT_PT[k] || k, v]));
       return {
         deck: { id: deck.id, name: deck.name, commanders: ctx.commanders, identity: deck.identity, count: deck.mainCount },
@@ -297,7 +206,7 @@ export function buildOptimizeTools(ctxTools) {
   const optimizeTool = {
     name: 'deck_optimize',
     description:
-      'Otimizador algorítmico do deck (NÃO altera nada), focado em deixar o deck melhor e mais fluido — menos mãos travadas e turnos mortos. Avalia as cartas com o modelo próprio (função, custo, fluidez, sinergia de texto; EDHREC só como referência), monta um pool de candidatas de várias fontes (listas do EDHREC, busca por função, ramp/compra/remoção baratas e cartas que conversam com o texto do comandante no cache local) — SEMPRE dentro da identidade de cor do comandante, legais e no bracket alvo — e roda trocas 1-por-1 que maximizam: valor das cartas + cobertura de funções + curva suave (cartas caras demais pesam mais) + fontes de cor + consistência (mão inicial, terrenos no tempo, ramp/compra cedo, jogadas baratas, poucas cartas caras presas). Terrenos na faixa calculada pelo próprio deck (MV médio, ramp barato). Confere com 2000 partidas simuladas (mulligan, turnos mortos, mana desperdiçada, mana travada, comandante no turno, compra resolvendo) e desfaz trocas que pioram a fluidez. Cartas acima do bracket alvo saem primeiro, a menos que estejam em lock. Devolve cada troca com ganho e motivo e um planId para deck_optimize_apply. Mostre o plano e só aplique depois do "sim".',
+      'Otimizador algorítmico do deck (NÃO altera nada), focado em deixar o deck melhor e mais fluido — menos mãos travadas e turnos mortos. Avalia as cartas com o modelo próprio (função, custo, fluidez, sinergia de texto; EDHREC só como referência), monta um pool de candidatas de várias fontes (listas do EDHREC, busca por função, ramp/compra/remoção baratas e cartas que conversam com o texto do comandante no banco local de cartas, motores de compra e payoffs/habilitadores do tema) — SEMPRE dentro da identidade de cor do comandante, legais e no bracket alvo — e roda trocas 1-por-1 que maximizam: valor das cartas + cobertura de funções + curva suave (cartas caras demais pesam mais) + fontes de cor + consistência (mão inicial, terrenos no tempo, ramp/compra cedo, jogadas baratas, poucas cartas caras presas). Terrenos na faixa calculada pelo próprio deck (MV médio, ramp barato). Confere com 2000 partidas simuladas (mulligan, turnos mortos, mana desperdiçada, mana travada, comandante no turno, compra resolvendo) e desfaz trocas que pioram a fluidez. Cartas acima do bracket alvo saem primeiro, a menos que estejam em lock. Devolve cada troca com ganho e motivo e o objeto "apply" para deck_optimize_apply (nada fica salvo). Mostre o plano e só aplique depois do "sim".',
     inputSchema: {
       type: 'object',
       properties: {
@@ -345,18 +254,7 @@ export function buildOptimizeTools(ctxTools) {
       const avgMv = nonland.reduce((s, e) => s + e.info.mv * e.qty, 0) / Math.max(1, nonland.reduce((s, e) => s + e.qty, 0));
       const commanderInfo = commanderInfoOf(deck);
       // role targets: generic, adapted to what decks of this commander actually run (EDHREC average deck)
-      let avgCounts = null;
-      if (ctx.avg) {
-        avgCounts = {};
-        let known = 0;
-        for (const c of ctx.avg.cards.values()) {
-          const rec = findCard(c.name);
-          if (!rec || /\bland\b/i.test(String(rec.type).split('//')[0])) continue;
-          known++;
-          for (const r of infoFromRecord(rec).roles) avgCounts[r] = (avgCounts[r] || 0) + (c.qty || 1);
-        }
-        if (known < 30) avgCounts = null;
-      }
+      const avgCounts = avgRoleCounts(ctx);
       const targets = roleTargets(avgCounts, tri.th.themes);
       const run = (opts) => optimize(entries, pool, { maxSwaps, minGain, locked, targetBracket, ctx, identity, deckIdentity: deckCi, avgMv, themes: tri.th.themes, targets, ...opts });
       let res = run({});
@@ -434,28 +332,8 @@ export function buildOptimizeTools(ctxTools) {
         }
       }
 
-      const catOf = (k) => deck.rows.find((r) => r.included && normName(r.name) === k)?.category ?? null;
-      const landCat = deck.rows.find((r) => r.included && /\bland\b/i.test(String(r.type).split('—')[0]) && !r.isCommander)?.category ?? null;
-      // category for the card that comes in: a deck category named after its main role, else the one of the card that leaves
-      const deckCats = new Map(deck.categories.filter((c) => c.included && !c.premier).map((c) => [normName(c.name), c.name]));
-      const ROLE_CATS = { ramp: ['ramp'], draw: ['draw', 'card draw', 'card advantage', 'compra'], removal: ['removal', 'remocao'], wipe: ['board wipe', 'wipe', 'wipes', 'removal'], protection: ['protection', 'protecao'], recursion: ['recursion', 'recursao'], tokens: ['tokens'], landfall: ['landfall'], 'sac-outlet': ['sac outlet', 'sacrifice'], counter: ['counterspell', 'counters'], tutor: ['tutor', 'tutors'] };
-      const catFor = (u) => {
-        for (const r of ['ramp', 'draw', 'removal', 'wipe', 'protection', 'recursion', 'tutor', 'landfall', 'tokens', 'sac-outlet']) {
-          if (!u.roles.includes(r)) continue;
-          for (const n of ROLE_CATS[r] || []) if (deckCats.has(n)) return deckCats.get(n);
-        }
-        return null;
-      };
-      const planSwaps = swaps.map((s) => ({
-        out: s.out.name,
-        in: s.in.name,
-        category: s.in.land ? landCat || (s.out.land ? catOf(s.out.k) : null) : catFor(s.in) || (!s.out.land ? catOf(s.out.k) : null),
-        gain: s.gain,
-      }));
+      const planSwaps = swaps.map((s) => ({ out: s.out.name, in: s.in.name, category: categoryFor(deck, s.out.name, s.in.info) }));
       if (!targetBracket) notes.push('Sem bracket alvo (o deck não declara um): Game Changers, MLD e combos não foram restringidos. Informe targetBracket para limitar.');
-      const planId = swaps.length
-        ? savePlan({ deckId: id, deckName: deck.name, createdAt: new Date().toISOString(), targetBracket, mode, theme: ctx.theme?.slug ?? null, swaps: planSwaps })
-        : null;
       if (deepInfo?.skipped) notes.push(`${deepInfo.skipped} página(s) de carta do EDHREC não consultadas (tempo); repetir melhora a triangulação.`);
       const total = Math.round(swaps.reduce((s, x) => s + x.gain, 0) * 10) / 10;
       const pct = (a, b) => `${a}% → ${b}%`;
@@ -485,8 +363,8 @@ export function buildOptimizeTools(ctxTools) {
         roleTargets: Object.fromEntries(Object.entries(targets).filter(([r]) => ['ramp', 'draw', 'removal', 'wipe', 'protection', 'recursion'].includes(r)).map(([r, [a, b]]) => [rolePt(r), `${a}-${b}${avgCounts?.[r] != null ? ` (referência: deck médio EDHREC usa ${avgCounts[r]})` : ''}`])),
         roles: { before: countRoles(entries.map((e) => [e.info, e.qty])), after: countRoles(afterInfos(entries, swaps)) },
         simulation: { before: beforeSim, after: afterSim },
-        planId,
-        next: planId ? `Para aplicar: deck_optimize_apply {deckId: ${id}, planId: "${planId}", confirm: true} (opcional: swaps=[números] para aplicar só algumas).` : undefined,
+        apply: swaps.length ? { deckId: id, swaps: planSwaps, confirm: true } : undefined,
+        next: swaps.length ? 'Para aplicar (depois do "sim"): deck_optimize_apply com o objeto "apply" acima — ou só as trocas escolhidas da lista "swaps". Nada fica salvo: o plano vive só nesta resposta.' : undefined,
         notes,
       };
     },
@@ -495,30 +373,42 @@ export function buildOptimizeTools(ctxTools) {
   const applyTool = {
     name: 'deck_optimize_apply',
     description:
-      'Aplica no Archidekt um plano gerado por deck_optimize (todas as trocas ou só as escolhidas em "swaps", numeradas a partir de 1). Exige confirm: true — só depois do "sim" do usuário. Salva um snapshot antes, confere que cada carta a sair ainda está no deck e a que entra ainda não está (pula as que mudaram), aplica, relê e verifica. Se existir a página do deck na wiki, registra as trocas no histórico.',
+      'Aplica no Archidekt trocas 1-por-1 vindas de deck_optimize ("apply.swaps") ou de uma opção de melhoria do deck_analyze ("options[].apply.swaps"): lista de {out, in, category?}. Nada é lido de disco — passe as trocas escolhidas. Exige confirm: true — só depois do "sim" do usuário. Confere que cada carta a sair ainda está no deck e a que entra ainda não está (terrenos básicos podem repetir), aplica, relê, verifica e devolve "undo" (como desfazer).',
     inputSchema: {
       type: 'object',
       properties: {
         deckId: { type: 'integer' },
-        planId: { type: 'string', description: 'Id do plano ou "latest".' },
-        swaps: { type: 'array', items: { type: 'integer', minimum: 1 } },
+        swaps: {
+          type: 'array',
+          minItems: 1,
+          maxItems: 30,
+          items: {
+            type: 'object',
+            properties: {
+              out: { type: 'string', description: 'Carta que sai (EN ou PT).' },
+              in: { type: 'string', description: 'Carta que entra (EN ou PT).' },
+              category: { type: 'string', description: 'Categoria da carta que entra (padrão: categoria da função dela no deck, ou a da carta que sai).' },
+            },
+            required: ['out', 'in'],
+          },
+        },
         confirm: { type: 'boolean' },
       },
-      required: ['deckId', 'confirm'],
+      required: ['deckId', 'swaps', 'confirm'],
     },
     annotations: WRITE,
     handler: async (args) => {
       const id = intArg(args.deckId, 'deckId');
-      if (args.confirm !== true) throw inputError('Aplicar exige confirm: true (mostre o plano e peça o "sim" do usuário antes).');
-      const plan = loadPlan(id, args.planId);
-      let chosen = plan.swaps.map((s, i) => ({ ...s, n: i + 1 }));
-      if (Array.isArray(args.swaps) && args.swaps.length) {
-        const bad = args.swaps.filter((n) => !Number.isInteger(n) || n < 1 || n > plan.swaps.length);
-        if (bad.length) throw inputError(`Trocas inexistentes no plano: ${bad.join(', ')} (o plano tem ${plan.swaps.length}).`);
-        const want = new Set(args.swaps);
-        chosen = chosen.filter((s) => want.has(s.n));
-      }
+      if (args.confirm !== true) throw inputError('Aplicar exige confirm: true (mostre as trocas e peça o "sim" do usuário antes).');
+      if (!Array.isArray(args.swaps) || !args.swaps.length) throw inputError('"swaps" deve ser uma lista não vazia de {out, in}.');
+      if (args.swaps.length > 30) throw inputError('Máximo de 30 trocas por chamada.');
+      const chosen = args.swaps.map((s, i) => {
+        if (!s || typeof s.out !== 'string' || !s.out.trim() || typeof s.in !== 'string' || !s.in.trim()) throw inputError(`Troca ${i + 1}: informe "out" e "in".`);
+        const en = (n) => resolveLocal(n.trim())?.en || n.trim();
+        return { n: i + 1, out: en(s.out), in: en(s.in), category: typeof s.category === 'string' && s.category.trim() ? s.category.trim() : null };
+      });
       const deck = await getDeck(id);
+      const deckCi = deck.commanders.length ? deckIdentityOf(deck, findCard) : null;
       const skipped = [];
       const changes = [];
       const qtyLeft = new Map();
@@ -526,35 +416,30 @@ export function buildOptimizeTools(ctxTools) {
       for (const s of chosen) {
         const ko = normName(s.out);
         const ki = normName(s.in);
+        const rec = findCard(s.in);
+        const basic = /\bbasic\b/i.test(rec?.type || '');
         if (!(qtyLeft.get(ko) > 0)) {
-          skipped.push({ n: s.n, swap: `-${s.out} +${s.in}`, reason: `${s.out} não está mais no deck` });
+          skipped.push({ n: s.n, swap: `-${s.out} +${s.in}`, reason: `${s.out} não está no deck` });
           continue;
         }
-        if (qtyLeft.get(ki) > 0) {
+        if (qtyLeft.get(ki) > 0 && !basic) {
           skipped.push({ n: s.n, swap: `-${s.out} +${s.in}`, reason: `${s.in} já está no deck` });
+          continue;
+        }
+        if (deckCi && rec && !withinIdentity(rec.ci, deckCi)) {
+          skipped.push({ n: s.n, swap: `-${s.out} +${s.in}`, reason: `${s.in} está fora da identidade de cor ${deckCi}` });
           continue;
         }
         const row = deck.rows.find((r) => r.included && normName(r.name) === ko);
         changes.push({ action: 'remove', deckRelationId: row.relId, quantity: 1 });
-        changes.push({ action: 'add', cardName: s.in, ...(s.category ? { category: s.category } : {}) });
+        const category = s.category || categoryFor(deck, s.out, rec ? infoFromRecord(rec) : null);
+        changes.push({ action: 'add', cardName: s.in, ...(category ? { category } : {}) });
         qtyLeft.set(ko, qtyLeft.get(ko) - 1);
-        qtyLeft.set(ki, 1);
+        qtyLeft.set(ki, (qtyLeft.get(ki) || 0) + 1);
       }
-      if (!changes.length) return { deckId: id, planId: plan.planId, applied: [], skipped, note: 'Nada a aplicar.' };
-      const result = await applyDeckChanges(id, changes, { snapshotNote: `antes do plano ${plan.planId} (deck_optimize)` });
-      let wikiNote = null;
-      try {
-        const page = wiki.deckPage(deck.name, deck.commanders.map((c) => c.name));
-        if (page.content && result.applied.length) {
-          const done = chosen.filter((s) => !skipped.some((k) => k.n === s.n));
-          const line = `| ${new Date().toISOString().slice(0, 10)} | ${done.map((s) => `-${s.out} +${s.in}`).join(', ')} | deck_optimize (${plan.mode}${plan.targetBracket ? `, bracket ${plan.targetBracket}` : ''}${plan.theme ? `, tema ${plan.theme}` : ''}) |`;
-          wiki.writePage(page.page, line, 'append');
-          wikiNote = `Registrado na wiki: ${page.page}`;
-        }
-      } catch (e) {
-        wikiNote = `Wiki não atualizada: ${e.message}`;
-      }
-      return { planId: plan.planId, ...result, skipped, ...(wikiNote ? { wiki: wikiNote } : {}) };
+      if (!changes.length) return { deckId: id, applied: [], skipped, note: 'Nada a aplicar.' };
+      const result = await applyDeckChanges(id, changes);
+      return { ...result, skipped };
     },
   };
 

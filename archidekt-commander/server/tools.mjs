@@ -2,7 +2,6 @@
 
 import crypto from 'node:crypto';
 import { ArchidektError } from './client.mjs';
-import { saveSnapshot } from './snapshots.mjs';
 import { buildInsightTools } from './tools-insight.mjs';
 import { buildOptimizeTools } from './tools-optimize.mjs';
 import { toEnglish } from './translate.mjs';
@@ -149,18 +148,13 @@ export function buildTools(client) {
   }
   const getDeck = async (deckId) => parseDeck(await getDeckRaw(deckId));
 
-  /** Apply a list of card changes to a deck (snapshot with 5+ changes or when snapshotNote is given), re-read and verify. */
-  async function applyDeckChanges(id, changes, { snapshotNote = null } = {}) {
+  /**
+   * Apply a list of card changes to a deck, re-read and verify. Nothing is saved on disk: the result carries
+   * `undo`, the list of changes that reverts what was applied (computed from the before/after decks).
+   */
+  async function applyDeckChanges(id, changes) {
     await client.ensureAuth();
     const before = await getDeck(id);
-    let snapshot = null;
-    if (changes.length >= 5 || snapshotNote) {
-      try {
-        snapshot = saveSnapshot(before, snapshotNote || `auto: antes de ${changes.length} mudanças`);
-      } catch (e) {
-        snapshot = { error: `snapshot automático falhou: ${e.message}` };
-      }
-    }
     let deck = before;
     const applied = [];
     const translations = [];
@@ -202,8 +196,9 @@ export function buildTools(client) {
       cardCountAfter: after?.mainCount ?? null,
       verification: verification(!readError && failedChecks.length === 0, readError ? `releitura falhou: ${readError}` : failedChecks.length ? `não confirmadas: ${failedChecks.join('; ')}` : ''),
       ...(translations.length ? { translations } : {}),
-      ...(snapshot ? { snapshot } : {}),
     };
+    const undo = after ? undoChanges(before, after) : [];
+    if (undo.length) result.undo = undo;
     return result;
   }
 
@@ -441,6 +436,32 @@ export function buildTools(client) {
       return translation ? { ...plan, translation } : plan;
     }
     throw inputError(`Ação desconhecida: ${action}. Use add, remove, set_quantity ou move_category.`);
+  }
+
+  /** Changes that turn `after` back into `before` (by card name and category; quantities only). */
+  function undoChanges(before, after) {
+    const tally = (d) => {
+      const m = new Map();
+      for (const r of d.rows) {
+        const k = `${fold(r.name)}|${r.category}`;
+        const cur = m.get(k) || { name: r.name, category: r.category, qty: 0 };
+        cur.qty += r.qty;
+        m.set(k, cur);
+      }
+      return m;
+    };
+    const b = tally(before);
+    const a = tally(after);
+    const out = [];
+    for (const [k, r] of b) {
+      const now = a.get(k)?.qty ?? 0;
+      if (now < r.qty) out.push({ action: 'add', cardName: r.name, quantity: r.qty - now, category: r.category });
+    }
+    for (const [k, r] of a) {
+      const then = b.get(k)?.qty ?? 0;
+      if (r.qty > then) out.push({ action: 'remove', cardName: r.name, quantity: r.qty - then, category: r.category });
+    }
+    return out;
   }
 
   function diffDecks(before, after) {
@@ -714,7 +735,7 @@ export function buildTools(client) {
     {
       name: 'archidekt_update_deck_cards',
       description:
-        'Altera cartas de um deck. changes: lista de {action: add|remove|set_quantity|move_category, cardName|cardid|deckRelationId, quantity, category, set, finish}. cardName pode ser em português (é traduzido; a tradução usada volta em "translations"). Com 5+ mudanças salva um snapshot antes. Uma requisição por mudança; para na primeira falha; relê o deck e mostra o diff (verified/not verified). Peça confirmação do usuário antes.',
+        'Altera cartas de um deck. changes: lista de {action: add|remove|set_quantity|move_category, cardName|cardid|deckRelationId, quantity, category, set, finish}. cardName pode ser em português (é traduzido; a tradução usada volta em "translations"). Não salva nada em disco: a resposta traz "undo" (as mudanças que desfazem o que foi aplicado). Uma requisição por mudança; para na primeira falha; relê o deck e mostra o diff (verified/not verified). Peça confirmação do usuário antes.',
       inputSchema: {
         type: 'object',
         properties: {

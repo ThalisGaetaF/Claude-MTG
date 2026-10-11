@@ -1,16 +1,19 @@
-// Phase 2 tools: card cache, translation, LigaMagic prices, deck analysis funnel, snapshots, personal wiki.
+// Tools: card database, translation, LigaMagic prices, deck analysis (+ improvement options), personal wiki.
+// Deck analysis is always computed from scratch in the call: no notes, plans or results from earlier sessions.
 
 import { analyzeDeck, cardInfo, commanderThemes, cutCandidates, gapRoles, heuristicSynergy, ROLE_TARGETS, rolePt } from './analysis.mjs';
-import { cacheSummary, findCard, getCache, jobStatus, ptNameOf, startUpdate } from './cache.mjs';
+import { cacheSummary, findCard, getCache, jobStatus, ptNameOf, resolveLocal, startUpdate } from './cache.mjs';
 import { deckIdentityOf, normColors, withinIdentity } from './commander.mjs';
 import { cardFluidity } from './fluidity.mjs';
 import { CORE_ROLES } from './roles.mjs';
-import { commanderPageSafe } from './edhrec.mjs';
 import * as liga from './ligamagic.mjs';
 import { ROLES, textRoles } from './roles.mjs';
 import * as scryfall from './scryfall.mjs';
-import { diffSnapshot, listSnapshots, loadSnapshot, saveSnapshot } from './snapshots.mjs';
+import { avgRoleCounts, candidatePool, engineReport, improvementOptions, scorecard, simulateInfos } from './improve.mjs';
+import { roleTargets } from './optimizer.mjs';
 import { envInt, normName, ToolError } from './store.mjs';
+import { categoryFor } from './tools-optimize.mjs';
+import { loadContext, MODE_ALIASES, triangulateDeck, VERDICT_PT } from './triangulate.mjs';
 import { translateName } from './translate.mjs';
 import * as wiki from './wiki.mjs';
 
@@ -25,7 +28,7 @@ const inputError = (m) => new ToolError('input', m);
 // report what was skipped instead of making the whole call fail.
 const budgetMs = () => envInt('ARCHIDEKT_TOOL_BUDGET_MS', 40_000);
 const deadlineFromNow = () => Date.now() + budgetMs();
-const TIME_LIMIT = 'não consultado (limite de tempo da chamada; repita para continuar — o que já foi consultado fica em cache)';
+const TIME_LIMIT = 'não consultado (limite de tempo da chamada; consulte de novo só esta carta com card_price_br)';
 
 const ROLE_ALIASES = {
   remocao: 'removal', 'remoção': 'removal', removal: 'removal', compra: 'draw', draw: 'draw', 'card-draw': 'draw', 'card-advantage': 'draw',
@@ -85,11 +88,17 @@ function publicCard(rec) {
 export function buildInsightTools(ctx) {
   const { client, getDeck, ownedRecords } = ctx;
 
-  async function analysisFor(deckId, { targetBracket, plan } = {}) {
-    const deck = await getDeck(deckId);
-    const edh = deck.commanders.length ? await commanderPageSafe(deck.commanders.map((c) => c.name)) : { found: false, cards: new Map(), typeMix: {} };
-    const analysis = analyzeDeck(deck, { lookup: findCard, edh, targetBracket, plan });
-    return { deck, edh, analysis };
+  /**
+   * Fresh analysis of a deck: live deck from Archidekt, live EDHREC reference pages, every card evaluated by the
+   * own model (deck_triangulate) so analysis, cut list and options rank cards the same way.
+   */
+  async function analysisFor(deckId, { targetBracket, plan, mode = 'equilibrio', deadline = deadlineFromNow(), deck: given = null } = {}) {
+    const deck = given || (await getDeck(deckId));
+    const ctx = await loadContext(deck, { targetBracket, deadline: deadline - 8000 });
+    const tri = triangulateDeck(deck, ctx, { lookup: findCard, mode, targetBracket, plan });
+    const evaluations = new Map(tri.cards.map((c) => [normName(c.name), c]));
+    const analysis = analyzeDeck(deck, { lookup: findCard, edh: ctx.base, targetBracket, plan, evaluations });
+    return { deck, edh: ctx.base, ctx, tri, analysis };
   }
 
   const strip = (a) => {
@@ -99,7 +108,7 @@ export function buildInsightTools(ctx) {
 
   async function priceList(list, { deadline = deadlineFromNow() } = {}) {
     // list: [{en, pt, query}] → results; stops on blocking and when the time budget runs out
-    // (cached prices are still returned after that).
+    // (prices already fetched in this call are still returned after that).
     const out = [];
     let blocked = null;
     let timeLimited = 0;
@@ -293,7 +302,7 @@ export function buildInsightTools(ctx) {
     // ---------------- prices ----------------
     {
       name: 'card_price_br',
-      description: 'Preços em reais (R$) na LigaMagic para até 30 cartas (nome PT ou EN): mínimo, médio, máximo, até 5 variantes (edição/número), link e data da consulta. Cache de 24 h; ≥2 s entre consultas; se a LigaMagic bloquear, para e avisa. Sempre cite "LigaMagic" e a data.',
+      description: 'Preços em reais (R$) na LigaMagic para até 30 cartas (nome PT ou EN): mínimo, médio, máximo, até 5 variantes (edição/número), link e data da consulta. Sempre ao vivo (sem cache); ≥2 s entre consultas; se a LigaMagic bloquear, para e avisa. Sempre cite "LigaMagic" e a data.',
       inputSchema: { type: 'object', properties: { names: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 30 } }, required: ['names'] },
       annotations: RO,
       handler: async (args) => {
@@ -317,7 +326,7 @@ export function buildInsightTools(ctx) {
           out.totalBRL = { min: s('min'), avg: s('avg'), cardsPriced: priced, incomplete: withMin < list.length || priced < list.length };
         }
         if (blocked) out.blocked = blocked;
-        if (timeLimited) out.timeLimited = `${timeLimited} carta(s) não consultada(s) por limite de tempo (≥2 s por consulta na LigaMagic). Repita a chamada: as já consultadas vêm do cache.`;
+        if (timeLimited) out.timeLimited = `${timeLimited} carta(s) não consultada(s) por limite de tempo (≥2 s por consulta na LigaMagic). Consulte só as que faltaram numa nova chamada.`;
         return out;
       },
     },
@@ -325,27 +334,136 @@ export function buildInsightTools(ctx) {
     // ---------------- analysis funnel ----------------
     {
       name: 'deck_analyze',
-      description: 'Análise profunda de um deck, focada em deixá-lo melhor e mais fluido: funções vs metas (ramp, compra, remoção, wipes, proteção, tutores, recursão), mana (curva, MV médio, faixa de terrenos calculada pelo próprio deck, símbolos vs fontes, terrenos virados), FLUIDEZ (jogadas de MV ≤ 2, topo da curva, cartas caras sem função que travam a mão, exigência de cor de cada cor com a chance de ter as fontes a tempo — comandante incluído —, motores de compra, usos para mana sobrando), sinergia com o comandante (texto; EDHREC só como referência), combos, Game Changers e bracket estimado, problemas por impacto e nota 0–100 por carta. Inclui a página da wiki do deck se existir.',
+      description:
+        'Análise completa e NOVA de um deck (nada de análises, planos ou notas anteriores: lê o deck agora no Archidekt e o EDHREC ao vivo, só como referência) + OPÇÕES DE MELHORIA prontas. Mostra: diagnóstico curto com números; nota 0–10 por área (base de mana, início de jogo, gás, interação, plano e sinergia, resiliência, qualidade das cartas); o motor do plano (para cada tema: habilitadores × payoffs, finalizadores, motores de compra, ramp × gás); simulação de 2000 partidas (turnos mortos, sem cartas no T6, mana travada, falta de cor, comandante no tempo); funções vs metas, mana, fluidez, bracket; problemas por impacto; avaliação de cada carta pelo modelo próprio (valor, veredito, motivos). As opções de melhoria são pacotes de até 4 trocas 1-por-1, cada um mirando um problema (cartas fracas, gás, começo de jogo, curva, interação, plano, base de mana), sempre dentro da identidade de cor, legais e no bracket, testados na simulação (antes × depois) e prontos para deck_optimize_apply. Não altera nada.',
       inputSchema: {
         type: 'object',
         properties: {
           deckId: { type: 'integer' },
-          targetBracket: { type: 'integer', minimum: 1, maximum: 5 },
+          targetBracket: { type: 'integer', minimum: 1, maximum: 5, description: 'Padrão: o declarado no deck.' },
           plan: { type: 'string', description: 'Plano de jogo em poucas palavras (ex.: "landfall tokens"), refina a sinergia.' },
+          mode: { type: 'string', enum: ['equilibrio', 'forca', 'tema'], default: 'equilibrio' },
+          lock: { type: 'array', items: { type: 'string' }, description: 'Cartas que nunca saem nas opções (PT ou EN).' },
+          exclude: { type: 'array', items: { type: 'string' }, description: 'Cartas que nunca entram nas opções (PT ou EN).' },
+          swapsPerOption: { type: 'integer', minimum: 1, maximum: 8, default: 4 },
+          checkOwned: { type: 'boolean', default: false, description: 'Marca quais cartas das opções você já tem na coleção (≈1,5 s por carta).' },
         },
         required: ['deckId'],
       },
       annotations: RO,
       handler: async (args) => {
         const id = intArg(args.deckId, 'deckId', { max: 1e10 });
-        const targetBracket = args.targetBracket != null ? intArg(args.targetBracket, 'targetBracket', { max: 5 }) : null;
-        const { deck, analysis } = await analysisFor(id, { targetBracket, plan: args.plan });
-        const page = wiki.deckPage(deck.name, deck.commanders.map((c) => c.name));
+        const deadline = deadlineFromNow();
+        const mode = args.mode == null ? 'equilibrio' : MODE_ALIASES[String(args.mode).trim().toLowerCase()];
+        if (!mode) throw inputError('mode deve ser "equilibrio", "forca" ou "tema".');
+        const perOption = intArg(args.swapsPerOption, 'swapsPerOption', { max: 8, dflt: 4 });
+        const deck0 = await getDeck(id);
+        const targetBracket = args.targetBracket != null ? intArg(args.targetBracket, 'targetBracket', { max: 5 }) : deck0.edhBracket ?? null;
+        const { deck, ctx, tri, analysis } = await analysisFor(id, { targetBracket, plan: args.plan, mode, deadline, deck: deck0 });
+        const notes = [...ctx.notes];
         const note = cacheNote();
-        const out = strip(analysis);
-        if (note) out.summary.push(note);
-        out.wikiPage = page.content ? { page: page.page, content: page.content.slice(0, 6000), truncated: page.content.length > 6000 } : { page: page.page, exists: false };
-        return out;
+        if (note) notes.push(note);
+        if (!targetBracket) notes.push('Bracket alvo não informado nem declarado no deck: Game Changers, MLD e combos não foram restringidos nas opções.');
+
+        const deckCi = deck.commanders.length ? deckIdentityOf(deck, findCard) : deck.identity || 'C';
+        const identity = deckCi && deckCi !== 'C' ? [...deckCi] : [];
+        const infos = [...tri.infos.values()];
+        const commanderInfo = deck.commanders[0] ? cardInfo(deck.commanders[0], findCard(deck.commanders[0].name)) : null;
+        const sim = simulateInfos(infos, commanderInfo, identity);
+        const engine = engineReport(infos, tri.th, { commanders: commanderInfo ? [commanderInfo] : [], plan: args.plan });
+        const card = scorecard({ analysis, sim, engine, tri });
+
+        // ---- issues: rules/roles/mana from the analysis + plan engine + what the simulation shows
+        const issues = analysis.issues.slice();
+        const add = (impact, area, problem, fix) => issues.push({ impact, area, problem, fix });
+        if (sim.outOfGasT6Pct >= 20) add(Math.min(8, Math.round(sim.outOfGasT6Pct / 5)), 'gás', `Sem mágica na mão no fim do T6 em ${sim.outOfGasT6Pct}% das partidas simuladas.`, 'Mais compra recorrente e payoffs; menos ramp/peças que só preparam.');
+        if (sim.deadTurnsT2toT5 >= 0.4) add(Math.min(8, Math.round(sim.deadTurnsT2toT5 * 10)), 'fluidez', `${sim.deadTurnsT2toT5} turno(s) sem jogar nada entre o T2 e o T5 (simulação).`, 'Mais jogadas de MV ≤ 2 e menos cartas caras sem função.');
+        if (sim.colorScrewT4Pct >= 15) add(6, 'mana', `Faltou alguma cor no T4 em ${sim.colorScrewT4Pct}% das partidas.`, 'Mais fontes da cor que falta (duais, ramp que busca a cor) ou menos símbolos pesados.');
+        if (sim.screwT4Pct >= 15) add(6, 'mana', `Travou com ≤ 2 terrenos no T4 em ${sim.screwT4Pct}% das partidas.`, 'Mais terrenos ou ramp de MV ≤ 2.');
+        if (engine.closers.count < 5) add(5, 'plano', `Só ${engine.closers.count} carta(s) que fecham o jogo (finalizadores, corpos grandes, pump/evasão em massa, dreno).`, 'Garanta 5–8 formas de fechar o jogo além do comandante.');
+        for (const t of engine.themes) if (t.advice) add(t.status === 'poucos payoffs' ? 6 : 4, 'plano', `${t.label}: ${t.enablers} habilitadores × ${t.payoffs} payoffs (${t.status}).`, t.advice);
+        if (engine.rampToGas.ratio != null && engine.rampToGas.ratio > 0.9 && sim.outOfGasT6Pct >= 15) add(5, 'gás', `Ramp ${engine.rampToGas.ramp} para ${engine.rampToGas.gas} cartas de gás (compra, payoffs, finalizadores).`, 'Troque o ramp mais fraco por compra/payoffs.');
+        issues.sort((a, b) => b.impact - a.impact);
+
+        // ---- improvement options
+        let options = [];
+        let poolInfo = null;
+        if (getCache()?.hasCards && deck.commanders.length) {
+          const toSet = (list) => new Set((list || []).map((n) => normName(resolveLocal(String(n))?.en || String(n))));
+          const locked = toSet(args.lock);
+          const excluded = toSet(args.exclude);
+          const { candidates, rejected } = candidatePool(deck, ctx, tri, { mode, targetBracket, deckCi });
+          const pool = candidates.filter((c) => !excluded.has(normName(c.info.name)));
+          poolInfo = { candidates: pool.length, rejected };
+          const evalByName = new Map(tri.cards.map((c) => [normName(c.name), c]));
+          const entries = [...tri.infos.entries()].map(([k, info]) => ({ info, eval: evalByName.get(k), qty: info.qty }));
+          const targets = roleTargets(avgRoleCounts(ctx), tri.th.themes);
+          const res = improvementOptions({ entries, pool, analysis, sim, engine, th: tri.th, identity, commanderInfo, locked, targets }, { maxSwaps: perOption });
+          options = res.options;
+          if (res.dropped) notes.push(`${res.dropped} opção(ões) descartada(s): pioravam a simulação sem melhorar as cartas.`);
+          for (const o of options) {
+            o.apply = { deckId: id, swaps: o.swaps.map((s) => ({ out: s.out.name, in: s.in.name, category: categoryFor(deck, s.out.name, findCard(s.in.name) ? cardInfo({ name: s.in.name, qty: 1, oracle: {} }, findCard(s.in.name)) : null) })), confirm: true };
+            for (const s of o.swaps) {
+              s.out.pt = ptNameOf(s.out.name) ?? undefined;
+              s.out.ligamagicUrl = liga.cardUrl(s.out.name);
+              s.in.pt = ptNameOf(s.in.name) ?? undefined;
+              s.in.ligamagicUrl = liga.cardUrl(s.in.name);
+            }
+          }
+          if (args.checkOwned && client.hasCredentials && options.length) {
+            try {
+              const me = await client.me();
+              const owned = new Map();
+              const names = [...new Set(options.flatMap((o) => o.swaps.map((s) => s.in.name)))];
+              let left = 0;
+              for (const n of names) {
+                if (deadline - Date.now() < 3000) {
+                  left++;
+                  continue;
+                }
+                const recs = await ownedRecords(me.id, n, 1);
+                owned.set(n, recs.reduce((acc, r) => acc + (Number(r.quantity) || 0), 0));
+              }
+              for (const o of options) for (const s of o.swaps) if (owned.has(s.in.name)) s.in.owned = owned.get(s.in.name);
+              if (left) notes.push(`Posse não conferida para ${left} carta(s) (limite de tempo).`);
+            } catch (e) {
+              notes.push(`Coleção não consultada: ${e.message}`);
+            }
+          }
+        } else if (!deck.commanders.length) notes.push('Deck sem comandante: sem opções de melhoria (não há identidade de cor para respeitar).');
+
+        // ---- cards: weakest and strongest by the own model
+        const nonland = tri.cards.filter((c) => !c.isLand);
+        const brief = (c) => ({ name: c.name, pt: ptNameOf(c.name) ?? undefined, ligamagicUrl: liga.cardUrl(c.name), value: c.value, verdict: VERDICT_PT[c.verdict] || c.verdict, mv: c.mv, why: c.why.slice(0, 4).join('; ') });
+        const byValue = nonland.slice().sort((a, b) => a.value - b.value || a.name.localeCompare(b.name));
+        const best = card.areas.slice().sort((a, b) => b.grade - a.grade)[0];
+        const worst = card.areas.slice().sort((a, b) => a.grade - b.grade)[0];
+        const diagnosis = [
+          `${deck.name} (${deck.commanders.map((c) => c.name).join(' + ') || 'sem comandante'}, ${deckCi || '?'}, ${deck.mainCount} cartas): nota geral ${card.overall}/10 — melhor área ${best.area} (${best.grade}), pior ${worst.area} (${worst.grade}).`,
+          engine.themes.length
+            ? `Plano: ${engine.themes.map((t) => `${t.label} (${t.enablers} habilitadores × ${t.payoffs} payoffs, ${t.status})`).join('; ')}; ${engine.closers.count} finalizadores; ${engine.drawEngines.count} motores de compra.`
+            : `Plano: nenhum tema forte detectado; ${engine.closers.count} finalizadores; ${engine.drawEngines.count} motores de compra.`,
+          `Simulação (${sim.games} partidas, quem começa): nota ${sim.score}/100; ${sim.deadTurnsT2toT5} turno(s) morto(s) T2–T5; sem mágica na mão no T6 ${sim.outOfGasT6Pct}%; travou em terreno no T4 ${sim.screwT4Pct}%; faltou cor no T4 ${sim.colorScrewT4Pct}%; comandante até 1 turno depois do custo ${sim.commanderByNextTurnPct ?? '—'}%.`,
+          issues.length ? `Principais problemas: ${issues.slice(0, 3).map((x) => x.problem).join(' | ')}` : 'Nenhum problema relevante.',
+          options.length ? `Melhor opção: "${options[0].title}" (${options[0].swaps.length} troca(s); simulação ${options[0].effect.simulation.score}; valor das cartas ${options[0].effect.valueDelta >= 0 ? '+' : ''}${options[0].effect.valueDelta}).` : 'Nenhuma opção de melhoria passou nos testes (ou o banco de cartas local está ausente).',
+        ];
+        const { _scored, _landTarget, cards: _c, summary: _s, issues: _i, ...rest } = analysis;
+        return {
+          freshness: `Calculado agora (${new Date().toISOString()}) a partir do deck no Archidekt; nenhuma análise, plano ou nota anterior foi usada.`,
+          diagnosis,
+          scorecard: card,
+          options,
+          issues: issues.slice(0, 12),
+          plan: engine,
+          simulation: sim,
+          ...rest,
+          cards: { weakest: byValue.slice(0, 12).map(brief), strongest: byValue.slice(-10).reverse().map(brief), all: byValue.map((c) => `${c.name} ${c.value} (${c.verdict})`) },
+          reference: { edhrec: ctx.base.found ? { slug: ctx.base.slug, decks: ctx.base.numDecks, theme: ctx.theme?.slug ?? null } : { found: false }, candidatePool: poolInfo },
+          targetBracket,
+          mode,
+          next: options.length ? 'Mostre as opções numeradas e peça para o usuário escolher. Aplicar: deck_optimize_apply com o objeto "apply" da opção (ou só algumas trocas), confirm: true, depois do "sim".' : undefined,
+          notes,
+        };
       },
     },
     {
@@ -514,7 +632,7 @@ export function buildInsightTools(ctx) {
         if (withPrices) {
           const top = ranked.slice(0, Math.min(15, count + (maxPrice != null ? 5 : 0)));
           const { results, blocked, timeLimited } = await priceList(top.map((c) => ({ en: c.name, pt: ptNameOf(c.name), query: ptNameOf(c.name) || c.name })), { deadline });
-          if (timeLimited) notes.push(`${timeLimited} preço(s) não consultado(s) por limite de tempo; repita a chamada (os já consultados ficam em cache) ou use card_price_br.`);
+          if (timeLimited) notes.push(`${timeLimited} preço(s) não consultado(s) por limite de tempo; use card_price_br só com essas cartas.`);
           top.forEach((c, i) => {
             const p = results[i];
             c.priceBRL = p?.found ? { min: p.min, avg: p.avg, fetchedAt: p.fetchedAt, url: p.url } : p?.error ? { error: p.error } : { found: false, searchUrl: p?.searchUrl ?? null };
@@ -557,41 +675,6 @@ export function buildInsightTools(ctx) {
           })),
           notes: notes.filter(Boolean),
         };
-      },
-    },
-
-    // ---------------- snapshots ----------------
-    {
-      name: 'deck_snapshot',
-      description: 'Salva uma foto da lista do deck (nome, qtd, categorias) em data/snapshots/<deckId>/. Use antes de mudanças grandes (update_deck_cards já faz isso sozinho com 5+ mudanças).',
-      inputSchema: { type: 'object', properties: { deckId: { type: 'integer' }, note: { type: 'string' } }, required: ['deckId'] },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
-      handler: async ({ deckId, note }) => {
-        const deck = await getDeck(intArg(deckId, 'deckId', { max: 1e10 }));
-        return { deckId: deck.id, name: deck.name, snapshot: saveSnapshot(deck, note ? String(note).slice(0, 300) : null) };
-      },
-    },
-    {
-      name: 'deck_snapshot_list',
-      description: 'Lista os snapshots salvos de um deck (id, data, nota, contagem).',
-      inputSchema: { type: 'object', properties: { deckId: { type: 'integer' } }, required: ['deckId'] },
-      annotations: LOCAL,
-      handler: async ({ deckId }) => {
-        const id = intArg(deckId, 'deckId', { max: 1e10 });
-        const list = listSnapshots(id);
-        return { deckId: id, count: list.length, snapshots: list };
-      },
-    },
-    {
-      name: 'deck_snapshot_diff',
-      description: 'Compara um snapshot (padrão: o mais recente) com o deck atual no Archidekt: cartas adicionadas, removidas, quantidades e categorias alteradas.',
-      inputSchema: { type: 'object', properties: { deckId: { type: 'integer' }, snapshot: { type: 'string', description: 'id do snapshot ou "latest".' } }, required: ['deckId'] },
-      annotations: RO,
-      handler: async ({ deckId, snapshot }) => {
-        const id = intArg(deckId, 'deckId', { max: 1e10 });
-        const snap = loadSnapshot(id, snapshot);
-        const deck = await getDeck(id);
-        return diffSnapshot(snap, deck);
       },
     },
 

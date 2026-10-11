@@ -1,12 +1,13 @@
 // Local storage: data/wiki locations, atomic writes, JSON helpers, text normalization, throttling.
 // Everything here works on Windows and POSIX (path.join, os.homedir, no shell).
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const VERSION = '0.6.0';
-export const USER_AGENT = `archidekt-commander-mcp/0.6`;
+export const VERSION = '0.7.0';
+export const USER_AGENT = `archidekt-commander-mcp/0.7`;
 
 /**
  * Reads an environment variable, treating empty values and unreplaced placeholders
@@ -173,3 +174,21 @@ export async function fetchWithTimeout(url, { headers = {}, timeoutMs = 30_000, 
 
 export const todayIso = () => new Date().toISOString();
 export const fileStamp = (d = new Date()) => d.toISOString().replace(/[:.]/g, '-');
+
+// ---------------------------------------------------------------- per-call memo (no persistent cache)
+// Deck analysis never reuses data from earlier calls: EDHREC pages and LigaMagic prices are fetched live.
+// Inside ONE tool call the same page is fetched only once (e.g. a card page needed twice); the memo dies
+// with the call. Outside a call scope (tests, scripts) every lookup simply goes to the network.
+
+const callScope = new AsyncLocalStorage();
+
+/** Run fn with a fresh per-call memo. */
+export const withCallScope = (fn) => callScope.run(new Map(), fn);
+
+/** Memo map for a namespace inside the current tool call, or a throwaway map outside any call. */
+export function callMemo(ns) {
+  const store = callScope.getStore();
+  if (!store) return new Map();
+  if (!store.has(ns)) store.set(ns, new Map());
+  return store.get(ns);
+}

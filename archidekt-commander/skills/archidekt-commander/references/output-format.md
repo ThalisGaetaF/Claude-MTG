@@ -66,7 +66,32 @@ The user reads these answers to decide what to change in a deck. Make them **pre
 
 Use exactly these shapes. Drop a column only when it has no data at all.
 
-**Trocas do otimizador** (`deck_optimize`)
+**Nota por área** (`deck_analyze` scorecard) — right after the diagnosis
+
+| Área | Nota | O que pesou |
+|---|--:|---|
+| Base de mana | 7,3 🟡 | travou em terreno no T4 3% · faltou cor 2% |
+| **Geral** | **8,1** | |
+
+(🟢 ≥ 8 · 🟡 6–7,9 · 🔴 < 6)
+
+**Motor do plano** (`deck_analyze` plan.themes — main themes only, secondary in one line below)
+
+| Tema | Habilitadores | Payoffs | Status |
+|---|--:|--:|:-:|
+| landfall / terrenos | 22 | 21 | 🟢 equilibrado |
+
+**Opções de melhoria** (`deck_analyze` options) — one block per option, in `rank` order:
+
+`#### 1. Mais gás: compra e payoffs — 🟢 recomendada` then one line with `problem`, then
+
+| # | ➖ Sai | ➕ Entra | Por quê | Tenho? |
+|--:|---|---|---|:-:|
+| 1.1 | [Horizon Explorer](url) | [Tireless Tracker](url)<br><sub>Rastreador Incansável</sub> | compra recorrente ligada a landfall | ✅ |
+
+and one line of effect: `Efeito: simulação 91,6 → 92,0 · sem cartas no T6 18,6% → 16,4% · compra 12 → 14`. Number swaps `<option>.<n>` so the user can answer "sim 1" (whole option) or "sim 1.1, 2.3".
+
+**Trocas do otimizador** (`deck_optimize` — global optimizer)
 
 | # | ➖ Sai | ➕ Entra | Ganho | Por quê (algoritmo) | Comentário (IA) |
 |--:|---|---|--:|---|---|
@@ -95,7 +120,7 @@ Use exactly these shapes. Drop a column only when it has no data at all.
 | [Sol Ring](url)<br><sub>Anel Solar</sub> | R$ 7,09 | R$ 67,83 | #249 |
 | **Total** | **R$ 7,09** | **R$ 67,83** | |
 
-<sub>Fonte: LigaMagic, 11/10/2026 (cache de 24 h).</sub>
+<sub>Fonte: LigaMagic, consulta ao vivo em 11/10/2026.</sub>
 
 **Funções do deck** (`deck_analyze` roles)
 
@@ -103,7 +128,7 @@ Use exactly these shapes. Drop a column only when it has no data at all.
 |---|--:|---|:-:|
 | Ramp | 9 | 10–12 | 🟡 |
 
-**Fluidez / simulação — antes × depois** (`deck_simulate`, plan `simulation`)
+**Fluidez / simulação — antes × depois** (`deck_simulate`, `deck_optimize` simulation, option `effect.simulation`)
 
 | Métrica | Antes | Depois | |
 |---|--:|--:|:-:|
@@ -138,7 +163,7 @@ Group by category with a bold label above each group (`**Ramp (10)**`), one smal
 | ➕ | [Explore](url) | Ramp |
 | ➖ | [Loading Zone](url) | — |
 
-Then one line: `🟢 Verificado no Archidekt · snapshot <id> · deck com 100 cartas`.
+Then one line: `🟢 Verificado no Archidekt · deck com 100 cartas`, and a collapsed note with `undo` (the changes that revert it) so the user can roll back.
 
 ## 6. Quick summary — always last
 

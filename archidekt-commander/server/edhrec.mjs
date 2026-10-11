@@ -7,15 +7,13 @@
 //   /pages/average-decks/<slug>[/<variant>].json  average deck: deck.cards = {Type: [[name, qty]…]}
 //   /pages/combos/<slug>.json                  combos: cardlists[] = {combo:{count, percentage, results, comboVote}, cardviews}
 //   /pages/cards/<card-slug>.json              card page: card {num_decks, potential_decks, salt}, "Top Commanders" list
-// Missing pages answer 403/404. 7-day disk cache (compact JSON), ≥1 s between requests.
+// Missing pages answer 403/404. Always fetched live (no disk cache), ≥1 s between requests.
 
 import path from 'node:path';
-import { dataDir, envInt, fetchWithTimeout, normName, readJson, Throttle, ToolError, USER_AGENT, writeJson } from './store.mjs';
+import { callMemo, envInt, fetchWithTimeout, normName, Throttle, ToolError, USER_AGENT } from './store.mjs';
 
 const base = () => (process.env.EDHREC_BASE || 'https://json.edhrec.com').replace(/\/+$/, '');
 const throttle = new Throttle(() => envInt('EDHREC_MIN_INTERVAL_MS', 1000));
-const TTL_MS = 7 * 24 * 3600 * 1000;
-const NOT_FOUND_TTL_MS = 24 * 3600 * 1000;
 
 export const BRACKET_SLUGS = { 1: 'exhibition', 2: 'core', 3: 'upgraded', 4: 'optimized', 5: 'cedh' };
 
@@ -46,35 +44,29 @@ const safeVariant = (v) => (v ? slugOf(v) : '');
 const num = (x) => (typeof x === 'number' && Number.isFinite(x) ? x : null);
 const round3 = (x) => (x == null ? null : Math.round(x * 1000) / 1000);
 
-/** Cache file for a page. */
-function cacheFile(kind, slug, variant = '') {
-  const name = variant ? `${slug}--${variant}` : slug;
-  return kind === 'commander' ? dataDir('edhrec', `${name}.json`) : dataDir('edhrec', kind, `${name}.json`);
+/**
+ * GET one EDHREC page, always live (no disk cache: an analysis never reuses data from earlier calls).
+ * Within one tool call the same URL is fetched only once (per-call memo). compact(page) turns the raw
+ * JSON into what the analysis uses. Returns {found, data, fetchedAt} or {found:false}; redirects as {redirect}.
+ */
+async function getPage(rel, compact) {
+  const memo = callMemo('edhrec');
+  if (memo.has(rel)) return memo.get(rel);
+  const p = fetchPage(rel, compact);
+  memo.set(rel, p);
+  try {
+    return await p;
+  } catch (e) {
+    memo.delete(rel); // a failure is not remembered: a later step of the same call may retry
+    throw e;
+  }
 }
 
-/**
- * GET one EDHREC page with disk cache. compact(page) turns the raw JSON into what is stored.
- * Returns {found, data, cached, fetchedAt} or {found:false}; redirects (commander pages) as {redirect}.
- */
-async function getPage(rel, file, compact) {
-  const cached = readJson(file, null);
-  if (cached?.fetchedAt) {
-    const age = Date.now() - Date.parse(cached.fetchedAt);
-    if (cached.notFound && age < NOT_FOUND_TTL_MS) return { found: false, cached: true };
-    if (cached.redirect && age < TTL_MS) return { redirect: cached.redirect, cached: true };
-    if (!cached.notFound && !cached.redirect && age < TTL_MS) {
-      // v1 files (0.2.x) stored the raw page; v2 store the compact form.
-      const data = cached.v === 2 ? cached.data : compact(cached.page);
-      return { found: true, data, cached: true, fetchedAt: cached.fetchedAt };
-    }
-  }
+async function fetchPage(rel, compact) {
   const url = `${base()}${rel}`;
   const res = await throttle.run(() => fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT, Accept: 'application/json' }, timeoutMs: 20_000, label: 'EDHREC' }));
   const text = await res.text();
-  if (res.status === 404 || res.status === 403) {
-    writeJson(file, { fetchedAt: new Date().toISOString(), notFound: true, status: res.status });
-    return { found: false, cached: false };
-  }
+  if (res.status === 404 || res.status === 403) return { found: false };
   if (res.status !== 200) throw new ToolError('http', `EDHREC respondeu HTTP ${res.status} para ${rel}.`, res.status);
   let page;
   try {
@@ -82,15 +74,8 @@ async function getPage(rel, file, compact) {
   } catch {
     throw new ToolError('contract', 'EDHREC devolveu algo que não é JSON.');
   }
-  if (page?.redirect && typeof page.redirect === 'string') {
-    const target = path.basename(page.redirect).replace(/\.json$/, '');
-    writeJson(file, { fetchedAt: new Date().toISOString(), redirect: target });
-    return { redirect: target, cached: false };
-  }
-  const fetchedAt = new Date().toISOString();
-  const data = compact(page);
-  writeJson(file, { fetchedAt, v: 2, data });
-  return { found: true, data, cached: false, fetchedAt };
+  if (page?.redirect && typeof page.redirect === 'string') return { redirect: path.basename(page.redirect).replace(/\.json$/, '') };
+  return { found: true, data: compact(page), fetchedAt: new Date().toISOString() };
 }
 
 // ---------------------------------------------------------------- commander pages
@@ -160,15 +145,15 @@ export async function commanderPage(commanderNames, { variant = null } = {}, dep
   const v = safeVariant(variant);
   if (!slug) return emptyPage(slug, v || null);
   const rel = `/pages/commanders/${slug}${v ? `/${v}` : ''}.json`;
-  const r = await getPage(rel, cacheFile('commander', slug, v), compactCommanderPage);
+  const r = await getPage(rel, compactCommanderPage);
   if (r.redirect) {
     // EDHREC answers a redirect object for renamed commanders: follow at most 2 (a loop must not recurse forever).
     if (depth >= 2) throw new ToolError('contract', `EDHREC: redirecionamentos demais para ${slug}.`);
     if (r.redirect === slug) return emptyPage(slug, v || null);
     return commanderPage([r.redirect.replace(/-/g, ' ')], { variant }, depth + 1);
   }
-  if (!r.found) return emptyPage(slug, v || null, r.cached ? { cached: true } : {});
-  return expandCommander(slug, v, r.data, { cached: r.cached, fetchedAt: r.fetchedAt });
+  if (!r.found) return emptyPage(slug, v || null);
+  return expandCommander(slug, v, r.data, { fetchedAt: r.fetchedAt });
 }
 
 /** Same as commanderPage but never throws: returns {found:false, error} on failure. */
@@ -205,7 +190,7 @@ export async function averageDeck(commanderNames, { variant = null } = {}) {
   const v = safeVariant(variant);
   if (!slug) return { slug, found: false, cards: new Map() };
   try {
-    const r = await getPage(`/pages/average-decks/${slug}${v ? `/${v}` : ''}.json`, cacheFile('average', slug, v), compactAverageDeck);
+    const r = await getPage(`/pages/average-decks/${slug}${v ? `/${v}` : ''}.json`, compactAverageDeck);
     if (!r.found) return { slug, variant: v || null, found: false, cards: new Map() };
     const cards = new Map(r.data.cards.map(([name, qty, type]) => [normName(name), { name, qty, type }]));
     return { slug, variant: v || null, found: true, numDecks: r.data.numDecks, cards };
@@ -242,7 +227,7 @@ export async function combosFor(commanderNames) {
   const slug = pageSlug(commanderNames);
   if (!slug) return { slug, found: false, combos: [] };
   try {
-    const r = await getPage(`/pages/combos/${slug}.json`, cacheFile('combos', slug), compactCombos);
+    const r = await getPage(`/pages/combos/${slug}.json`, compactCombos);
     return r.found ? { slug, found: true, combos: r.data.combos } : { slug, found: false, combos: [] };
   } catch (e) {
     return { slug, found: false, combos: [], error: e.message };
@@ -285,20 +270,11 @@ function expandCard(d, slug) {
 export async function cardPage(name) {
   const tries = [...new Set([slugOf(name), slugOf(name, { frontOnly: false })].filter(Boolean))];
   for (const slug of tries) {
-    const r = await getPage(`/pages/cards/${slug}.json`, cacheFile('cards', slug), compactCardPage);
+    const r = await getPage(`/pages/cards/${slug}.json`, compactCardPage);
     if (!r.found) continue;
     const want = normName(String(name).split(' // ')[0]);
     if (r.data.name && !normName(r.data.name).startsWith(want)) continue; // another card with the same slug
-    return { ...expandCard(r.data, slug), cached: r.cached };
+    return { ...expandCard(r.data, slug), fetchedAt: r.fetchedAt };
   }
   return { found: false, slug: tries[0] };
-}
-
-/** True when the card page is already on disk (fresh) — lets callers spend the time budget on new pages only. */
-export function cardPageCached(name) {
-  for (const slug of [slugOf(name), slugOf(name, { frontOnly: false })]) {
-    const c = readJson(cacheFile('cards', slug), null);
-    if (c?.fetchedAt && Date.now() - Date.parse(c.fetchedAt) < (c.notFound ? NOT_FOUND_TTL_MS : TTL_MS) && !c.notFound) return true;
-  }
-  return false;
 }

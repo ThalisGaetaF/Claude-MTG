@@ -8,6 +8,14 @@ Plugin do Claude (Cowork / Claude desktop) que conecta o Claude à sua conta do 
 - Campos opcionais deixados em branco (placeholders `${user_config.*}` não substituídos) são ignorados; o servidor cai no `credentials.json` / pasta padrão.
 - Instruções no README da raiz do repositório.
 
+**Novidades da versão 0.7.0 — análise sempre do zero e com opções de melhoria**
+
+- **Nada de cache sobre o deck**: a análise lê o deck e o EDHREC ao vivo a cada chamada; não usa nem grava notas da wiki, planos do otimizador, snapshots, páginas do EDHREC ou preços. Preços da LigaMagic também são sempre ao vivo. (O banco local de cartas do Scryfall continua: são só os textos/funções das cartas e os nomes em PT.)
+- **`deck_analyze` muito mais completo**: diagnóstico com números, **nota 0–10 por área** (base de mana, início de jogo, gás, interação, plano, resiliência, qualidade das cartas), **motor do plano** (habilitadores × payoffs de cada tema, finalizadores, motores de compra, ramp × gás), simulação de 2000 partidas e a avaliação de cada carta pelo mesmo modelo do otimizador.
+- **Opções de melhoria prontas**: pacotes de até 4 trocas, cada um mirando um problema (cartas fracas, gás, começo de jogo, curva, interação, plano, base de mana), dentro da identidade de cor, testados na simulação (antes × depois) e ordenados pelo efeito. Para aplicar: `deck_optimize_apply` com as trocas escolhidas.
+- **Sem snapshots/planos em disco**: `deck_optimize` devolve as trocas na própria resposta; `deck_optimize_apply` recebe `{out, in}`; toda escrita devolve `undo` (como desfazer). Ferramentas `deck_snapshot*` removidas.
+- A wiki só é escrita quando você pede.
+
 **Novidades da versão 0.4.0 — foco em fluidez, EDHREC só como referência, identidade de cor garantida**
 
 - **Modelo próprio de avaliação**: cada carta é julgada pela função, custo, **fluidez** (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sinergia de texto com o comandante e com os temas que o próprio deck já tem. O EDHREC virou **um voto de referência** (~20% do valor) — sozinho ele nunca manda cortar uma carta.
@@ -111,19 +119,18 @@ Toda escrita relê o Archidekt depois e responde `verified` ou `not verified`. A
 | `card_lookup` | Ficha da carta: nome EN+PT, custo, tipo, texto, funções, legalidade, Game Changer, rank EDHREC |
 | `card_search_local` | Busca por função/cores/MV/tipo/texto ("ramp verde até 3 de mana") |
 | `card_price_br` | Preços em R$ na LigaMagic (até 30 cartas, com total) |
-| `deck_analyze` | Análise completa do deck + página da wiki do deck |
+| `deck_analyze` | Análise completa e nova do deck (nota por área, motor do plano, simulação) + opções de melhoria testadas |
 | `deck_cut_candidates` | Cartas candidatas a corte, com motivo |
 | `deck_upgrade_candidates` | Sugestões de entrada sempre dentro da identidade de cor (cache + EDHREC como referência), marca as que você tem, preço LigaMagic e qual corte substituem |
-| `deck_snapshot` / `deck_snapshot_list` / `deck_snapshot_diff` | Fotos do deck e comparação com o atual |
-| `wiki_list` / `wiki_read` / `wiki_write` / `wiki_search` | Wiki pessoal em Markdown |
+| `wiki_list` / `wiki_read` / `wiki_write` / `wiki_search` | Wiki pessoal em Markdown (só quando você pede) |
 
 ### Novas ferramentas (0.3.0)
 
 | Ferramenta | O que faz |
 |---|---|
 | `deck_triangulate` | Valor, veredito, confiança e motivos de cada carta: modelo próprio (função, custo, fluidez, sinergia de texto) + EDHREC como referência |
-| `deck_optimize` | Plano de trocas do otimizador (busca local + simulação), com ganho e motivo de cada troca e um `planId` |
-| `deck_optimize_apply` | Aplica o plano (todo ou só algumas trocas) — exige `confirm: true` |
+| `deck_optimize` | Trocas do otimizador global (busca local + simulação), com ganho e motivo de cada troca e o objeto `apply` |
+| `deck_optimize_apply` | Aplica as trocas escolhidas (`{out, in}`) — exige `confirm: true`; devolve `undo` |
 | `deck_simulate` | Simulação Monte Carlo do deck, com "e se" (remove/add) |
 
 ### Como o otimizador decide (0.4)
@@ -150,7 +157,7 @@ Toda resposta segue o mesmo padrão (`skills/archidekt-commander/references/outp
 Pasta: `ARCHIDEKT_HOME` (se definida) → senão `%USERPROFILE%\Projects\archidekt-mcp` (se existir) → senão `%USERPROFILE%\.archidekt`. Dentro dela:
 
 - `data\cards.json`, `data\pt-names.json`, `data\cache-meta.json` — cache de cartas do Scryfall (**~15–20 MB** no total; o download é de ~31 MB compactados, processado em streaming).
-- `data\ligamagic-prices.json` (preços, válidos por 24 h), `data\edhrec\` (páginas de comandantes, temas, brackets, deck médio, combos e cartas — 7 dias), `data\plans\<deckId>\` (planos do otimizador), `data\snapshots\<deckId>\` (fotos dos decks).
+- Nada sobre os seus decks é guardado: análises, planos, snapshots, páginas do EDHREC e preços são consultados ao vivo a cada chamada.
 - `wiki\` — sua wiki (Markdown comum; pode abrir e editar no Bloco de Notas, VS Code, Obsidian…). Começa com `README.md` e o modelo `_templates\deck.md`.
 
 ### Atualizar o cache de cartas
@@ -159,9 +166,9 @@ O servidor atualiza sozinho, em segundo plano, quando o cache não existe ou tem
 
 ### Preços da LigaMagic — aviso
 
-A LigaMagic **não tem API pública**: o plugin lê a página de busca do site, de forma educada (no máximo uma consulta a cada 2 s, até 30 cartas por pedido, cache de 24 h). Se o site bloquear o acesso automatizado (Cloudflare/captcha/403), o plugin para na hora, avisa e não tenta de novo por 15 minutos — confira no site. Mudanças no layout do site podem quebrar a leitura dos preços. Os preços são uma referência do momento da consulta (o Claude sempre cita "LigaMagic" e a data).
+A LigaMagic **não tem API pública**: o plugin lê a página de busca do site, de forma educada (no máximo uma consulta a cada 2 s, até 30 cartas por pedido, sempre ao vivo). Se o site bloquear o acesso automatizado (Cloudflare/captcha/403), o plugin para na hora, avisa e não tenta de novo por 15 minutos — confira no site. Mudanças no layout do site podem quebrar a leitura dos preços. Os preços são uma referência do momento da consulta (o Claude sempre cita "LigaMagic" e a data).
 
-Fontes externas usadas: Scryfall (API oficial, gratuita), EDHREC (JSON não oficial, cache de 7 dias) e LigaMagic (página pública).
+Fontes externas usadas: Scryfall (API oficial, gratuita), EDHREC (JSON não oficial, consultado ao vivo, só como referência) e LigaMagic (página pública).
 
 ## Exemplos de pedidos
 
@@ -185,7 +192,7 @@ Fontes externas usadas: Scryfall (API oficial, gratuita), EDHREC (JSON não ofic
 - `archidekt_collection_update`/`_remove` sem nome de carta varrem a coleção página a página (lento em coleções grandes).
 - Preços vêm só da LigaMagic (veja o aviso acima); a análise usa heurísticas (funções por tags + texto, notas 0–100) — são um guia, não um veredito.
 - O otimizador usa heurísticas próprias e o EDHREC como referência; não testa o deck em partidas reais — a simulação é "goldfish" (sem oponentes). Use `lock` para manter cartas que você sabe que funcionam.
-- Na primeira vez para um comandante, `deck_triangulate`/`deck_optimize` baixam ~7 páginas do EDHREC (1 s cada) e as páginas das cartas duvidosas; depois fica em cache por 7 dias.
+- Cada `deck_analyze`/`deck_triangulate`/`deck_optimize` baixa ~7 páginas do EDHREC (1 s cada; mais as páginas das cartas duvidosas com `deep`) — não há cache, então cada análise leva de 10 a 40 s.
 - `deck_upgrade_candidates` com preços pode levar ~1 minuto (confere a coleção carta a carta e espera 2 s entre consultas à LigaMagic).
 
 ## Desenvolvimento
@@ -196,4 +203,4 @@ node tests/run-tests.mjs
 
 Os testes sobem mocks locais do Archidekt (`tests/mock-server.mjs`) e de Scryfall/LigaMagic/EDHREC (`tests/mock-external.mjs`) e conversam com o servidor via stdio. Variáveis úteis: `ARCHIDEKT_API_BASE`, `SCRYFALL_API_BASE`, `LIGAMAGIC_BASE`, `EDHREC_BASE` (URLs base), `ARCHIDEKT_MIN_INTERVAL_MS`, `SCRYFALL_MIN_INTERVAL_MS`, `LIGAMAGIC_MIN_INTERVAL_MS`, `EDHREC_MIN_INTERVAL_MS`, `LIGAMAGIC_BLOCK_COOLDOWN_MS`, `SCRYFALL_RETRY_DELAY_MS` (intervalos), `ARCHIDEKT_TOOL_BUDGET_MS` (tempo máximo por chamada das ferramentas lentas, padrão 40000), `ARCHIDEKT_HOME` (pasta de dados) e `ARCHIDEKT_NO_AUTO_CACHE=1`.
 
-Módulos do servidor: `index.mjs` (entrada), `mcp.mjs` (JSON-RPC stdio), `client.mjs` (Archidekt), `commander.mjs` (regras), `tools.mjs` (ferramentas Archidekt), `tools-insight.mjs` (ferramentas 0.2), `tools-optimize.mjs` (ferramentas 0.3), `store.mjs` (pastas, gravação atômica), `cache.mjs` + `scryfall.mjs` (cache de cartas), `roles.mjs` (funções), `translate.mjs`, `ligamagic.mjs`, `edhrec.mjs`, `analysis.mjs`, `triangulate.mjs` (triangulação), `optimizer.mjs` (busca local), `simulate.mjs` (hipergeométrica + Monte Carlo), `snapshots.mjs`, `wiki.mjs`.
+Módulos do servidor: `index.mjs` (entrada), `mcp.mjs` (JSON-RPC stdio), `client.mjs` (Archidekt), `commander.mjs` (regras), `tools.mjs` (ferramentas Archidekt), `tools-insight.mjs` (ferramentas 0.2), `tools-optimize.mjs` (ferramentas 0.3), `store.mjs` (pastas, gravação atômica), `cache.mjs` + `scryfall.mjs` (cache de cartas), `roles.mjs` (funções), `translate.mjs`, `ligamagic.mjs`, `edhrec.mjs`, `analysis.mjs`, `triangulate.mjs` (triangulação), `optimizer.mjs` (busca local), `simulate.mjs` (hipergeométrica + Monte Carlo), `improve.mjs` (motor do plano, nota por área, opções de melhoria), `wiki.mjs`.

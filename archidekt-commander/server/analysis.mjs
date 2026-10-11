@@ -43,11 +43,23 @@ const THEMES = [
   ['elementals', /\belementals?\b/],
 ];
 
+/** Theme names whose pattern matches a text (e.g. the user's plan). */
+export function themesOf(text) {
+  const t = String(text || '').toLowerCase();
+  return THEMES.filter(([, re]) => re.test(t)).map(([n]) => n);
+}
+
 const TYPE_ORDER = ['land', 'creature', 'planeswalker', 'battle', 'instant', 'sorcery', 'artifact', 'enchantment'];
 
 function mainType(typeLine) {
   const t = String(typeLine || '').toLowerCase().split('//')[0];
   return TYPE_ORDER.find((x) => new RegExp(`\\b${x}\\b`).test(t)) || 'other';
+}
+
+function powerOf(p) {
+  if (p == null || p === '') return null;
+  const n = parseInt(String(p), 10);
+  return Number.isFinite(n) ? n : 0;
 }
 
 /** Merge Archidekt oracle data + cache record into a flat card info. */
@@ -91,6 +103,8 @@ export function cardInfo(row, rec) {
       /(artifact|enchantment)-removal|removal-(artifact|enchantment)/.test(tags.join(' ')),
     edict: /(target player|target opponent|each opponent|each player) sacrifices (a|an|two) (creature|attacking|nonland|permanent)/i.test(lower),
     subtypes: (o.subTypes || []).map((s) => String(s).toLowerCase()),
+    // power of a creature (null when not a creature or unknown, "*" counts as 0)
+    power: powerOf(o.power ?? (rec?.pt ? String(rec.pt).split('/')[0] : null)),
     inCache: !!rec,
     // color identity letters ('' = colorless, null = unknown): Scryfall cache first, then Archidekt
     ci: rec?.ci != null ? rec.ci : row.colorIdentity != null ? (row.colorIdentity === 'C' ? '' : row.colorIdentity) : null,
@@ -178,7 +192,7 @@ export function estimateBracket({ gc, tutors, extraTurns, mld, combos }) {
  * Full analysis. deck = parseDeck() output; lookup(name) → cache record | null;
  * edh = EDHREC commanderPage() result (or {found:false}).
  */
-export function analyzeDeck(deck, { lookup = () => null, edh = { found: false, cards: new Map(), typeMix: {} }, targetBracket = null, plan = null } = {}) {
+export function analyzeDeck(deck, { lookup = () => null, edh = { found: false, cards: new Map(), typeMix: {} }, targetBracket = null, plan = null, evaluations = null } = {}) {
   const main = deck.rows.filter((r) => r.included);
   const commanders = main.filter((r) => r.isCommander);
   // aggregate rows by card name
@@ -272,7 +286,13 @@ export function analyzeDeck(deck, { lookup = () => null, edh = { found: false, c
 
   // ---- per-card scores
   const target = targetBracket ? Number(targetBracket) : null;
-  const scored = others.map((c) => scoreCard(c, { th, edh, target, gcCount: gcCards.length, identity }));
+  // evaluations (deck_triangulate's own model + EDHREC reference) replace the simple score when given,
+  // so the analysis, the cut list and the optimizer all rank cards the same way
+  const scored = others.map((c) => {
+    const ev = evaluations?.get(normName(c.name));
+    if (ev) return { info: c, score: ev.value, why: [...(ev.why || [])], verdict: ev.verdict };
+    return scoreCard(c, { th, edh, target, gcCount: gcCards.length, identity });
+  });
   // redundancy beyond role targets
   for (const role of CORE_ROLES) {
     const max = ROLE_TARGETS[role]?.[1];
@@ -356,7 +376,7 @@ export function analyzeDeck(deck, { lookup = () => null, edh = { found: false, c
     typeMix: { deck: typeCounts, edhrec: edh.found ? edh.typeMix : null, diffs: typeDiffs },
     edhrec: { slug: edh.slug ?? null, found: !!edh.found, numDecks: edh.numDecks ?? null, ...(edh.error ? { error: edh.error } : {}) },
     issues,
-    cards: scored.map((s) => ({ name: s.info.name, score: s.score, roles: [...s.info.roles], mv: s.info.mv, type: s.info.type, why: s.why.join('; ') })),
+    cards: scored.map((s) => ({ name: s.info.name, score: s.score, ...(s.verdict ? { verdict: s.verdict } : {}), roles: [...s.info.roles], mv: s.info.mv, type: s.info.type, why: s.why.join('; ') })),
     _scored: scored,
     _landTarget: lt,
   };

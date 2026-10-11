@@ -137,13 +137,13 @@ try {
     'archidekt_update_deck_cards', 'archidekt_update_deck_info', 'archidekt_delete_deck', 'archidekt_collection_add',
     'archidekt_collection_update', 'archidekt_collection_remove',
     'cards_cache_update', 'cards_cache_status', 'card_translate', 'card_lookup', 'card_search_local', 'card_price_br',
-    'deck_analyze', 'deck_cut_candidates', 'deck_upgrade_candidates', 'deck_snapshot', 'deck_snapshot_list', 'deck_snapshot_diff',
+    'deck_analyze', 'deck_cut_candidates', 'deck_upgrade_candidates',
     'wiki_list', 'wiki_read', 'wiki_write', 'wiki_search',
     'deck_triangulate', 'deck_optimize', 'deck_optimize_apply', 'deck_simulate',
   ];
-  check('tools/list exposes all 35 tools', expected.every((n) => names.includes(n)) && names.length === expected.length, names);
+  check('tools/list exposes all 32 tools (no snapshot tools)', expected.every((n) => names.includes(n)) && names.length === expected.length, names);
   check('tool names are unique', new Set(names).size === names.length);
-  check('initialize reports version 0.6.0', init.result?.serverInfo?.version === '0.6.0', init.result?.serverInfo);
+  check('initialize reports version 0.7.0', init.result?.serverInfo?.version === '0.7.0', init.result?.serverInfo);
   check('every tool has an object inputSchema', list.result.tools.every((t) => t.inputSchema?.type === 'object'));
   // Structural JSON Schema check (draft 2020-12 subset used by MCP clients).
   const schemaErrors = [];
@@ -295,7 +295,7 @@ try {
   check('diff lists changes', ['+ 1 Rampant Growth [Ramp]', '~ Sol Ring [Ramp] 2 → 1', '> Cultivate: Maybeboard → Ramp', '- 1 Island [Land]', '~ Forest [Land] 30 → 31'].every((l) => r.json?.diff?.includes(l)), r.json?.diff);
   check('foil modifier sent', patches[6]?.body.cards[0].modifications.modifier === 'Foil' && patches[6].body.cards[0].cardid === 901, patches[6]?.body);
   check('card count updated 46 → 48', r.json?.cardCountAfter === 48, r.json);
-  check('7 changes → automatic snapshot saved before applying', typeof r.json?.snapshot?.id === 'string' && fs.existsSync(r.json.snapshot.file), r.json?.snapshot);
+  check('7 changes → no snapshot on disk; undo list returned instead', !('snapshot' in (r.json || {})) && Array.isArray(r.json?.undo) && r.json.undo.some((u) => u.action === 'remove' && u.cardName === 'Rampant Growth') && r.json.undo.some((u) => u.action === 'add' && u.cardName === 'Island'), r.json?.undo);
 
   r = await call('archidekt_update_deck_cards', { deckId: 1001, changes: [{ action: 'add', cardName: 'Sol Ring' }] });
   check('add duplicate non-basic → stopped, nothing applied', r.json?.applied?.length === 0 && /já está no deck/.test(r.json?.stoppedAt?.error), r.text);
@@ -383,7 +383,7 @@ try {
   check('collection_remove verified', r.json?.verification === 'verified' && !state.collection.has(9004), r.text);
 
   // ---- hygiene ----
-  check('every request uses honest User-Agent', state.log.every((x) => x.ua === 'archidekt-commander-mcp/0.6'));
+  check('every request uses honest User-Agent', state.log.every((x) => x.ua === 'archidekt-commander-mcp/0.7'));
   check('auth header scheme is JWT', state.log.filter((x) => x.auth).every((x) => x.auth === 'JWT'));
   check('password never in tool output', outputs.every((t) => !t.includes(MOCK_USER.password)));
   check('password/token never in stderr', !s.stderr.includes(MOCK_USER.password) && !/eyJ[A-Za-z0-9_-]{10,}/.test(s.stderr), s.stderr);

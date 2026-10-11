@@ -163,7 +163,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     const ptj = JSON.parse(fs.readFileSync(path.join(dataDir, 'pt-names.json'), 'utf8'));
     check('pt-names: PT → EN and most common EN → PT', ptj.pt['anel solar'] === 'Sol Ring' && ptj.en['Lightning Bolt'] === 'Relâmpago' && ptj.pt['raio'] === 'Lightning Bolt', ptj.en);
     check('pt-names: DFC face printed names', ptj.pt['despertar de valakut'] === 'Valakut Awakening // Valakut Stoneforge');
-    check('Scryfall requests use honest UA', (await extLog()).filter((x) => x.path.startsWith('/scryfall')).every((x) => x.ua === 'archidekt-commander-mcp/0.6'));
+    check('Scryfall requests use honest UA', (await extLog()).filter((x) => x.path.startsWith('/scryfall')).every((x) => x.ua === 'archidekt-commander-mcp/0.7'));
     r = await p1.call('cards_cache_update', {});
     check('fresh cache → "já atualizado em <data>"', r.json?.started === false && /já atualizado em \d{4}-/.test(r.json?.status), r.text);
 
@@ -218,7 +218,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     let n1 = (await extLog()).filter((x) => x.path.startsWith('/liga')).length;
     r = await p1.call('card_price_br', { names: ['Sol Ring'] });
     const n2 = (await extLog()).filter((x) => x.path.startsWith('/liga')).length;
-    check('price: 24 h disk cache hit (no new request)', r.json?.results?.[0]?.cached === true && n2 === n1 && fs.existsSync(path.join(dataDir, 'ligamagic-prices.json')), { n0, n1, n2, t: r.text });
+    check('price: always live (new request, nothing stored on disk)', r.json?.results?.[0]?.found === true && !('cached' in r.json.results[0]) && n2 > n1 && !fs.existsSync(path.join(dataDir, 'ligamagic-prices.json')), { n0, n1, n2, t: r.text });
     check('price: single card has no totalBRL', r.json && !('totalBRL' in r.json));
     r = await p1.call('card_price_br', { names: ['Blocked Card', 'Cultivar Nope'] });
     check('price: 403/Cloudflare → clear blocked message, rest skipped', /bloqueou/.test(r.json?.blocked || '') && /bloqueou/.test(r.json.results[0].error) && /não consultado/.test(r.json.results[1].error), r.text);
@@ -262,7 +262,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     n0 = (await extLog()).filter((x) => x.path.startsWith('/edhrec')).length;
     r = await p1.call('deck_analyze', { deckId: 1003, targetBracket: 2 });
     const a = r.json || {};
-    check('analyze: summary lines (PT-BR)', Array.isArray(a.summary) && a.summary.length >= 5 && /Terrenos/.test(a.summary[1]), a.summary);
+    check('analyze: diagnosis lines (PT-BR) + freshness note', Array.isArray(a.diagnosis) && a.diagnosis.length >= 5 && /nota geral/.test(a.diagnosis[0]) && /Simulação/.test(a.diagnosis[2]) && /Calculado agora/.test(a.freshness || ''), a.diagnosis);
     check('analyze: role counts (oTags + cache + text)', a.roles?.ramp?.count === 4 && a.roles.removal.cards.includes('Beast Within') && a.roles.wipe.cards.includes('Blasphemous Act') && a.roles.recursion.cards.includes('Eternal Witness'), a.roles);
     check('analyze: role status vs target', a.roles?.ramp?.status === 'baixo' && a.roles.ramp.target === '10-12', a.roles?.ramp);
     check('analyze: mana (lands, tapped, curve, pips/sources)', a.mana?.lands === 36 && a.mana.tappedLands.includes('Temple of Abandon') && a.mana.curve['7+'] >= 1 && a.mana.sources.G >= 31 && a.mana.pips.G > 0, a.mana);
@@ -270,24 +270,36 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     check('analyze: bracket issue for target 2', a.issues?.some((i) => i.area === 'bracket'), a.issues);
     check('analyze: issues sorted by impact', a.issues?.every((x, i, arr) => i === 0 || arr[i - 1].impact >= x.impact), a.issues);
     check('analyze: no playgroup/opponent meta check (focus is the deck itself)', !('meta' in a) && !a.issues?.some((i) => i.area === 'meta' || /voltron|aristocrat/i.test(i.problem + i.fix)), a.issues);
-    check('analyze: fluidity report (early plays, top end, color requirements, odds)', a.fluidity && typeof a.fluidity.earlyPlays.count === 'number' && Array.isArray(a.fluidity.colorRequirements) && a.fluidity.odds.earlyPlayByT2 >= 0 && a.summary.some((l) => /^Fluidez:/.test(l)), a.fluidity);
-    check('analyze: EDHREC baseline + type mix', a.edhrec?.found === true && a.edhrec.numDecks === 5000 && a.typeMix?.edhrec?.creature === 30, a.edhrec);
-    const cs = Object.fromEntries((a.cards || []).map((c) => [c.name, c]));
-    check('analyze: per-card scores 0–100 with reasons', (a.cards || []).every((c) => c.score >= 0 && c.score <= 100 && typeof c.why === 'string') && !cs['Omnath, Locus of Rage'], a.cards?.slice(0, 3));
-    check('analyze: Dreadmaw scores below Lotus Cobra', cs['Colossal Dreadmaw']?.score < cs['Lotus Cobra']?.score && /EDHREC/.test(cs['Lotus Cobra'].why), [cs['Colossal Dreadmaw'], cs['Lotus Cobra']]);
-    check('analyze: GC penalized for bracket 2', /Game Changer acima/.test(cs['The One Ring']?.why), cs['The One Ring']);
-    check('analyze: tapped land penalized', /-12 entra virado/.test(cs['Temple of Abandon']?.why) && cs['Temple of Abandon'].score < 60, [cs['Temple of Abandon'], cs.Forest]);
-    check('analyze: includes existing wiki page for the deck', a.wikiPage?.page === 'decks/omnath-analise' && /Landfall \+ Elementais/.test(a.wikiPage.content), a.wikiPage);
+    check('analyze: fluidity report (early plays, top end, color requirements, odds)', a.fluidity && typeof a.fluidity.earlyPlays.count === 'number' && Array.isArray(a.fluidity.colorRequirements) && a.fluidity.odds.earlyPlayByT2 >= 0, a.fluidity);
+    check('analyze: EDHREC reference + type mix', a.edhrec?.found === true && a.edhrec.numDecks === 5000 && a.typeMix?.edhrec?.creature === 30 && a.reference?.edhrec?.decks === 5000, a.edhrec);
+    check('analyze: simulation of the current deck (2000 games)', a.simulation?.games === 2000 && typeof a.simulation.score === 'number' && typeof a.simulation.outOfGasT6Pct === 'number', a.simulation);
+    check('analyze: scorecard with 7 areas graded 0–10 + overall', a.scorecard?.areas?.length === 7 && a.scorecard.areas.every((x) => x.grade >= 0 && x.grade <= 10 && typeof x.key === 'string') && a.scorecard.overall >= 0 && a.scorecard.overall <= 10, a.scorecard);
+    check('analyze: plan engine (landfall enablers × payoffs, closers, draw engines)', a.plan?.themes?.some((t) => t.theme === 'landfall' && t.payoffs >= 1 && t.enablers >= 1) && typeof a.plan.closers.count === 'number' && typeof a.plan.rampToGas.ramp === 'number', a.plan);
+    const all = Object.fromEntries((a.cards?.all || []).map((l) => { const m = /^(.*) (\d+) \((.*)\)$/.exec(l); return m ? [m[1], { value: Number(m[2]), verdict: m[3] }] : [l, null]; }));
+    check('analyze: every nonland card valued by the own model (0–100 + verdict), commander excluded', Object.keys(all).length > 5 && Object.values(all).every((c) => c && c.value >= 0 && c.value <= 100 && c.verdict) && !all['Omnath, Locus of Rage'], a.cards?.all?.slice(0, 3));
+    check('analyze: Dreadmaw valued below Lotus Cobra', all['Colossal Dreadmaw']?.value < all['Lotus Cobra']?.value, [all['Colossal Dreadmaw'], all['Lotus Cobra']]);
+    check('analyze: GC flagged for bracket 2 (weakest list explains why)', (a.cards?.weakest || []).some((c) => c.name === 'The One Ring' && /Game Changer/.test(c.why)), a.cards?.weakest);
+    check('analyze: weakest/strongest lists with LigaMagic links', a.cards?.weakest?.length > 0 && a.cards.strongest.length > 0 && a.cards.weakest.every((c) => /view=cards\/card/.test(c.ligamagicUrl)), a.cards?.weakest?.[0]);
+    const opts = a.options || [];
+    const optIns = opts.flatMap((o) => o.swaps.map((s) => s.in.name));
+    check('analyze: improvement options (ranked, each with swaps, effect and apply)', opts.length >= 1 && opts.every((o, i) => o.rank === i + 1 && o.title && o.problem && o.swaps.length >= 1 && o.swaps.length <= 4 && o.effect?.simulation?.score && Array.isArray(o.apply?.swaps) && o.apply.confirm === true && o.apply.swaps.length === o.swaps.length), opts.map((o) => [o.id, o.swaps.length]));
+    check('analyze: options stay inside the color identity, legal and bracket-safe (no Counterspell/Demonic Tutor/Mana Crypt/GC)', optIns.length > 0 && !optIns.some((n) => ['Counterspell', 'Demonic Tutor', 'Mana Crypt', 'The One Ring'].includes(n)), optIns);
+    check('analyze: option swaps explain out/in and link LigaMagic', opts.every((o) => o.swaps.every((s) => /sai .* entra /.test(s.why) && /view=cards\/card/.test(s.in.ligamagicUrl) && /view=cards\/card/.test(s.out.ligamagicUrl))), opts[0]?.swaps?.[0]);
+    check('analyze: no notes from earlier sessions (wiki is not read)', !('wikiPage' in a), Object.keys(a));
     check('analyze: internals stripped', !('_scored' in a) && !('_landTarget' in a));
-    r = await p1.call('deck_analyze', { deckId: 1003 });
+    check('analyze: deck NOT changed', mockState.decks.get(1003).cards.some((c) => c.card.oracleCard.name === 'The One Ring'));
+    r = await p1.call('deck_analyze', { deckId: 1003, lock: ['Colossal Dreadmaw'], exclude: optIns.slice(0, 1) });
     n1 = (await extLog()).filter((x) => x.path.startsWith('/edhrec')).length;
-    check('EDHREC 7-day disk cache (1 request for 2 analyses)', n1 - n0 === 1 && fs.existsSync(path.join(dataDir, 'edhrec', 'omnath-locus-of-rage.json')), { n0, n1 });
-    check('analyze without targetBracket: no bracket issue', !r.json?.issues?.some((i) => i.area === 'bracket'), r.json?.issues);
+    check('analyze: lock/exclude respected in the options', !(r.json?.options || []).some((o) => o.swaps.some((s) => s.out.name === 'Colossal Dreadmaw' || s.in.name === optIns[0])), r.json?.options?.map((o) => o.swaps.map((s) => `${s.out.name}>${s.in.name}`)));
+    const commanderHits = (await extLog()).filter((x) => x.path === '/edhrec/pages/commanders/omnath-locus-of-rage.json').length;
+    check('EDHREC always live: the second analysis fetches the commander page again, nothing stored on disk', commanderHits >= 2 && n1 > n0 && !fs.existsSync(path.join(dataDir, 'edhrec')), { n0, n1, commanderHits });
+    r = await p1.call('deck_analyze', { deckId: 1003, targetBracket: 4 });
+    check('analyze with a high target bracket: no bracket issue', !r.json?.issues?.some((i) => i.area === 'bracket'), r.json?.issues);
     r = await p1.call('deck_analyze', { deckId: 2001 });
-    check('analyze: EDHREC 404 handled gracefully', r.json?.edhrec?.found === false && Array.isArray(r.json.cards), r.text.slice(0, 400));
+    check('analyze: EDHREC 404 handled gracefully', r.json?.edhrec?.found === false && Array.isArray(r.json.cards?.all), r.text.slice(0, 400));
     r = await p1.call('deck_analyze', { deckId: 2001 });
     const n404 = (await extLog()).filter((x) => x.path.includes('atraxa')).length;
-    check('EDHREC 404 cached (no hammering)', n404 === 1, n404);
+    check('EDHREC 404 is not cached either (asked again on the next analysis)', n404 >= 2, n404);
     r = await p1.call('deck_analyze', { deckId: 999999 });
     check('analyze: missing deck → error', r.isError && /404/.test(r.text), r.text);
     r = await p1.call('deck_analyze', { deckId: 1003, targetBracket: 9 });
@@ -318,15 +330,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     r = await p1.call('deck_upgrade_candidates', { deckId: 1003, role: 'nada' });
     check('upgrades: bad role → error', r.isError, r.text);
 
-    // ---- snapshots + PT names in writes ----
-    r = await p1.call('deck_snapshot_list', { deckId: 1003 });
-    check('snapshot list empty at first', r.json?.count === 0, r.text);
-    r = await p1.call('deck_snapshot', { deckId: 1003, note: 'antes do upgrade' });
-    const manualSnap = r.json?.snapshot?.id;
-    check('deck_snapshot saved', typeof manualSnap === 'string' && fs.existsSync(r.json.snapshot.file) && r.json.snapshot.file.includes(path.join('snapshots', '1003')), r.text);
-    check('snapshot file names are Windows-safe', !/[:]/.test(path.basename(r.json?.snapshot?.file || ':')));
-    r = await p1.call('deck_snapshot_diff', { deckId: 1003 });
-    check('diff vs current: unchanged', r.json?.unchanged === true, r.text);
+    // ---- PT names in writes ----
     r = await p1.call('archidekt_update_deck_cards', {
       deckId: 1003,
       changes: [
@@ -340,18 +344,9 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     const u = r.json || {};
     check('update_deck_cards with PT names verified', u.verification === 'verified' && u.applied?.length === 5, r.text);
     check('translations reported', u.translations?.length === 4 && u.translations.some((t) => t.input === 'Relâmpago' && t.en === 'Lightning Bolt') && u.translations.some((t) => t.input === 'Testemunha Eterna'), u.translations);
-    check('auto snapshot on 5 changes', typeof u.snapshot?.id === 'string', u.snapshot);
-    r = await p1.call('deck_snapshot_list', { deckId: 1003 });
-    check('snapshot list has manual + auto', r.json?.count === 2 && r.json.snapshots.some((s) => /auto/.test(s.note)), r.text);
-    r = await p1.call('deck_snapshot_diff', { deckId: 1003, snapshot: manualSnap });
-    const d = r.json || {};
-    check('diff: added / removed / changed', d.added?.some((x) => x.name === 'Lightning Bolt') && d.added.some((x) => x.name === "Kodama's Reach") && d.removed?.some((x) => x.name === 'Eternal Witness') && d.changed?.some((x) => x.name === 'Forest' && x.from === 30 && x.to === 29) && d.changed.some((x) => x.name === 'Mountain' && x.to === 6), d);
-    r = await p1.call('deck_snapshot_diff', { deckId: 1003, snapshot: 'nope' });
-    check('diff: unknown snapshot → error', r.isError && /não existe/.test(r.text), r.text);
-    r = await p1.call('deck_snapshot_diff', { deckId: 1002 });
-    check('diff: deck without snapshots → error', r.isError && /Nenhum snapshot/.test(r.text), r.text);
+    check('5 changes: no snapshot on disk, undo returned', !('snapshot' in u) && !fs.existsSync(path.join(dataDir, 'snapshots')) && u.undo?.some((x) => x.action === 'remove' && x.cardName === 'Lightning Bolt') && u.undo.some((x) => x.action === 'add' && x.cardName === 'Eternal Witness'), u.undo);
     r = await p1.call('archidekt_update_deck_cards', { deckId: 1003, changes: [{ action: 'remove', cardName: 'Relampago' }] });
-    check('small batch: no snapshot, PT remove works', u && r.json?.verification === 'verified' && !r.json.snapshot && r.json.translations?.[0]?.en === 'Lightning Bolt', r.text);
+    check('small batch: PT remove works', u && r.json?.verification === 'verified' && !r.json.snapshot && r.json.translations?.[0]?.en === 'Lightning Bolt', r.text);
 
     r = await p1.call('archidekt_search_collection', { cardNames: ['Anel Solar', 'Sol Ring'] });
     check('search_collection accepts PT names', r.json?.results?.[0]?.name === 'Sol Ring' && r.json.results[0].totalOwned === r.json.results[1].totalOwned && r.json.results[0].translation?.input === 'Anel Solar', r.text);
@@ -452,7 +447,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
       r = await p5.call('archidekt_update_deck_cards', { deckId: 1003, changes: [{ action: 'add', cardName: 'Testemunha Eterna', category: 'Creatures' }] });
       check('update_deck_cards PT add via Scryfall when no cache', r.json?.verification === 'verified' && r.json.translations?.[0]?.source === 'scryfall-fuzzy', r.text);
       r = await p5.call('deck_analyze', { deckId: 1003 });
-      check('deck_analyze works without cache (with note)', Array.isArray(r.json?.cards) && r.json.summary.some((l) => /cards_cache_update/.test(l)), r.text.slice(0, 500));
+      check('deck_analyze works without cache (with note, no options)', Array.isArray(r.json?.cards?.all) && r.json.notes.some((l) => /cards_cache_update/.test(l)) && r.json.options.length === 0, r.text.slice(0, 500));
       r = await p5.call('deck_upgrade_candidates', { deckId: 1003, count: 3, withPrices: false });
       check('upgrades without cache: unverified EDHREC cards are never suggested (identity cannot be confirmed)', !r.isError && (r.json?.candidates || []).length === 0 && r.json.notes.some((n) => /identidade de cor/.test(n)), r.text);
     } finally {
@@ -555,7 +550,7 @@ export async function runReviewFixes({ McpProc, baseEnv, check, ext, archBase, M
     const n0 = (await (await fetch(`${ext.origin}/__test/log`)).json()).filter((x) => x.path.includes('old-name')).length;
     const red2 = await edh.commanderPageSafe(['Old Name']);
     const n1 = (await (await fetch(`${ext.origin}/__test/log`)).json()).filter((x) => x.path.includes('old-name')).length;
-    check('EDHREC redirect followed and cached', red.found && red.slug === 'omnath-locus-of-rage' && red2.found && n1 === n0, { red: red.slug, n0, n1 });
+    check('EDHREC redirect followed (live every time, no cache)', red.found && red.slug === 'omnath-locus-of-rage' && red2.found && n1 > n0, { red: red.slug, n0, n1 });
 
     // ---- analysis sanity ----
     const { analyzeDeck, cutCandidates } = await import('../server/analysis.mjs');
@@ -620,7 +615,7 @@ export async function runReviewFixes({ McpProc, baseEnv, check, ext, archBase, M
     const limited = (r.json?.results || []).filter((x) => /limite de tempo/.test(x.error || '')).length;
     check('card_price_br respects the per-call time budget (stops, reports, no failure)', !r.isError && dt < 7000 && limited >= 2 && /limite de tempo/.test(r.json.timeLimited || ''), { dt, r: r.text.slice(0, 600) });
     r = await p.call('card_price_br', { names: ['Zz One'] });
-    check('prices fetched before the limit are cached (incl. "not found")', r.json?.results?.[0]?.cached === true && r.json.results[0].found === false, r.text);
+    check('a later call asks LigaMagic again (no cache between calls)', !r.json?.results?.[0]?.cached && r.json.results[0].found === false && !fs.existsSync(path.join(hT, 'data', 'ligamagic-prices.json')), r.text);
     r = await p.call('card_price_br', { names: ['Login Form Card'] });
     check('page mentioning recaptcha (no results) is not treated as a block', !r.json?.blocked && r.json?.results?.[0]?.found === false, r.text);
     const t1 = Date.now();

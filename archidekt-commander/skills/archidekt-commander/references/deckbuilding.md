@@ -59,7 +59,7 @@ Cut first: cards that do nothing the turn they land without setup, off-plan "goo
 
 # How the analysis tools work
 
-Read this part when you need to explain a score, doubt a role count, or troubleshoot the cache, prices or wiki.
+Read this part when you need to explain a score, doubt a role count, or troubleshoot the card database, prices or wiki.
 
 ## Where data lives
 
@@ -70,10 +70,9 @@ Root folder: `ARCHIDEKT_HOME` if set, else `%USERPROFILE%\Projects\archidekt-mcp
 | `data/cards.json` | Compact Scryfall oracle cards (paper only): name, faces, MV, cost, type, text, colors, identity, keywords, Commander legality, Game Changer, EDHREC rank, USD, roles, tags | 7 days (auto refresh on start) |
 | `data/pt-names.json` | PT → EN index and the most common PT name per EN card | same job |
 | `data/cache-meta.json` | updatedAt, counts, sources, durationMs, errors | — |
-| `data/ligamagic-prices.json` | LigaMagic price cache | 24 h |
-| `data/edhrec/<slug>.json` | EDHREC commander pages (404s cached 1 day) | 7 days |
-| `data/snapshots/<deckId>/<timestamp>.json` | Deck snapshots | kept |
-| `wiki/` | Personal Markdown wiki | kept |
+| `wiki/` | Personal Markdown wiki (written only when the user asks) | kept |
+
+Nothing about a deck is stored: no analysis results, no optimizer plans, no snapshots, no EDHREC pages, no prices. Every deck analysis reads the deck and EDHREC live; LigaMagic prices are fetched live. Inside one tool call the same page is fetched only once (in-memory, discarded at the end of the call). Writes return `undo` (the changes that revert them) instead of a snapshot file.
 
 ## Roles
 
@@ -104,6 +103,8 @@ Bracket estimate: start at 2; any Game Changer, more than 2 tutors, or a 2-card 
 
 ## Per-card score (0–100)
 
+`deck_analyze`, `deck_cut_candidates` and `deck_upgrade_candidates` use the `deck_triangulate` value (see "How the optimizer works") so every tool ranks cards the same way. The simple score below is the fallback when a card has no evaluation.
+
 Nonland cards start at 45:
 - **Role value:** +12 per core role (cap +24), +5 per secondary role (tokens, landfall, sac outlet, wincon, anthem, evasion; cap +10).
 - **Mana efficiency:** MV ≤ 1 +6, 2 +5, 3 +2, 4 0, 5 −4, 6 −8, then −3 per extra MV (halved for wipes and wincons).
@@ -128,7 +129,7 @@ Scores sort; they don't decide. Read `why` and use judgement (a 6-MV finisher ma
 
 ## LigaMagic
 
-No public API: the server reads the search page. It uses the plain-name row (aggregate across editions) and lists up to 5 variants, ignoring Art Cards. "R$ 0,00" = no stock (`null`). ≥ 2 s between requests, 24 h cache, ≤ 30 cards per call. A 403/429/503, Cloudflare or captcha page stops the batch ("LigaMagic bloqueou acesso automatizado") and pauses LigaMagic for 15 minutes — no retries. If the site layout changes, prices stop appearing: say so and point to the site.
+No public API: the server reads the search page. It uses the plain-name row (aggregate across editions) and lists up to 5 variants, ignoring Art Cards. "R$ 0,00" = no stock (`null`). ≥ 2 s between requests, always live (no cache), ≤ 30 cards per call. A 403/429/503, Cloudflare or captcha page stops the batch ("LigaMagic bloqueou acesso automatizado") and pauses LigaMagic for 15 minutes — no retries. If the site layout changes, prices stop appearing: say so and point to the site.
 
 ## EDHREC
 
@@ -138,6 +139,14 @@ Unofficial JSON (`json.edhrec.com/pages/commanders/<slug>.json`). Slug = front-f
 
 Markdown under `wiki/`. Page names are sanitized (no `..`, absolute paths or backslashes; only `[a-z0-9-_/]` after removing accents; max 3 levels; Windows reserved names refused); 200 KB per page. `wiki_search` ignores case and accents. Deck template: `_templates/deck.md`.
 
+
+# How `deck_analyze` works (0.7)
+
+- Live deck + live EDHREC reference → every card valued by `deck_triangulate`'s own model → roles, mana, fluidity, bracket (as above).
+- **Simulation:** 2000 goldfish games of the current deck (same engine as below).
+- **Plan engine** (`plan`): for each theme (landfall, tokens, counters, sacrifice, graveyard, spells, artifacts, enchantments, lifegain, equipment) counts **enablers** (cards that feed the plan) and **payoffs** (cards that turn it into advantage or damage). A commander that is a payoff counts as 3. Themes from the deck's text only (not the commander nor the plan) need ≥ 4 payoffs and ≥ 6 enablers to be reported. Main themes = the user's plan + the two biggest engines; status: equilibrado · poucos payoffs (< 5) · poucos habilitadores (< 8) · muita base, pouco retorno (enablers > 3,5 × payoffs). Also: closers (win cons, power ≥ 5, mass pump/evasion, drain, big payoffs), draw engines, ramp × gas.
+- **Scorecard** 0–10: base de mana (screw/color screw at T4, tapped lands, land count), início de jogo (dead turns, commander on time, cheap plays), gás (out of gas at T6, draw engines), interação (removal/wipes/instant share), plano e sinergia (average text synergy, payoffs, closers), resiliência (protection + recursion), qualidade das cartas (average value, doubtful cards).
+- **Options:** packages of ≤ 4 1-for-1 swaps, each aimed at one problem — `upgrade` (doubtful/cut cards → cards ≥ 12 points better that share a function or fit the plan), `gas` (surplus/weak ramp or off-role cards → draw engines, real card draw, payoffs; never more ramp), `early` (clunky MV ≥ 4 cards → MV ≤ 2 plays), `curve` (dead top end → MV ≤ 3), `interaction` (off-role cards → removal/wipes, instant preferred), `plan` (off-plan cards → missing payoffs/enablers of a main theme), `mana` (tapped/off-color lands that are not plan enablers → basic of the most needed color). Closers, payoffs and good enablers of the main themes are never cut; a card holding a role at/below its minimum leaves only for one with the same role; adding to a role already at its maximum costs points. Candidates: EDHREC lists + local database search (roles below target, cheap ramp/draw/removal, draw engines, enablers and payoffs of every theme, text synergy) — inside the color identity, legal, bracket-safe. Each option is simulated (same seed) and ranked by 3 × Δ simulation + Δ card value/30 (±3) − 0,4 × Δ out-of-gas − 6 × Δ dead turns; options that play worse without better cards are dropped.
 
 # How the optimizer works (0.4)
 

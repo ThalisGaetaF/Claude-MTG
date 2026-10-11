@@ -2,9 +2,9 @@
   "manifest_version": "0.3",
   "name": "archidekt-commander",
   "display_name": "Archidekt Commander",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Veja e edite sua coleção e seus decks do Archidekt, crie e otimize decks de Commander (EDH), com nomes de cartas em português e preços em reais (LigaMagic).",
-  "long_description": "Servidor MCP que conecta o Claude à sua conta do Archidekt. Lê e edita coleção e decks, valida as regras do Commander (identidade de cor garantida em toda sugestão e escrita), analisa fluidez, sugere cortes e upgrades, roda um otimizador algorítmico com simulação Monte Carlo (EDHREC só como referência), traduz nomes de cartas PT ⇄ EN, consulta preços na LigaMagic e mantém uma wiki pessoal em Markdown. Usa o Node.js que já vem com o Claude desktop: não precisa instalar nada. Sem e-mail e senha, só as ferramentas públicas funcionam.",
+  "long_description": "Servidor MCP que conecta o Claude à sua conta do Archidekt. Lê e edita coleção e decks, valida as regras do Commander (identidade de cor garantida em toda sugestão e escrita), analisa o deck sempre do zero (nota por área, motor do plano, simulação) com opções de melhoria prontas, sugere cortes e upgrades, roda um otimizador algorítmico com simulação Monte Carlo (EDHREC só como referência), traduz nomes de cartas PT ⇄ EN, consulta preços na LigaMagic e mantém uma wiki pessoal em Markdown. Usa o Node.js que já vem com o Claude desktop: não precisa instalar nada. Sem e-mail e senha, só as ferramentas públicas funcionam.",
   "author": {
     "name": "Thalis"
   },
@@ -136,7 +136,7 @@
     },
     {
       "name": "deck_analyze",
-      "description": "Análise profunda de um deck, focada em deixá-lo melhor e mais fluido: funções vs metas (ramp, compra, remoção, wipes, proteção, tutores, recursão), mana (curva, MV médio, faixa de terrenos calculada p"
+      "description": "Análise completa e nova do deck (sem cache): nota por área, motor do plano, simulação e opções de melhoria testadas."
     },
     {
       "name": "deck_cut_candidates",
@@ -145,18 +145,6 @@
     {
       "name": "deck_upgrade_candidates",
       "description": "Sugestões de entrada para um deck, SEMPRE dentro da identidade de cor do comandante (cartas sem identidade confirmada no cache local são descartadas), legais e fora do deck"
-    },
-    {
-      "name": "deck_snapshot",
-      "description": "Salva uma foto da lista do deck (nome, qtd, categorias) em data/snapshots/<deckId>/"
-    },
-    {
-      "name": "deck_snapshot_list",
-      "description": "Lista os snapshots salvos de um deck (id, data, nota, contagem)"
-    },
-    {
-      "name": "deck_snapshot_diff",
-      "description": "Compara um snapshot (padrão: o mais recente) com o deck atual no Archidekt: cartas adicionadas, removidas, quantidades e categorias alteradas"
     },
     {
       "name": "wiki_list",
@@ -184,7 +172,7 @@
     },
     {
       "name": "deck_optimize_apply",
-      "description": "Aplica no Archidekt um plano gerado por deck_optimize (todas as trocas ou só as escolhidas em \"swaps\", numeradas a partir de 1)"
+      "description": "Aplica as trocas escolhidas ({out, in}) depois do seu \"sim\"; devolve como desfazer."
     },
     {
       "name": "deck_simulate",

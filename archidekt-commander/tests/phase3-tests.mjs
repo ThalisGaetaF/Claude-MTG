@@ -177,7 +177,7 @@ async function phase3({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     check('triangulate deep: card page evidence used (global inclusion)', /de todos os decks das suas cores/.test(by['Colossal Dreadmaw']?.why || ''), by['Colossal Dreadmaw']);
     r = await p.call('deck_triangulate', { deckId: 1003, targetBracket: 2, onlyVerdicts: ['nucleo'] });
     const n1 = (await extLog()).filter((x) => x.path.startsWith('/edhrec')).length;
-    check('triangulate: EDHREC pages cached (second call: only pages that 403ed before are retried later)', n1 - (n0 + log1.length) <= 2 && (r.json?.cards || []).every((c) => c.verdict === 'nucleo'), { n0, n1, l: log1.length });
+    check('triangulate: EDHREC always live (second call fetches the pages again, nothing on disk)', n1 - (n0 + log1.length) >= 3 && !fs.existsSync(path.join(h, 'data', 'edhrec')) && (r.json?.cards || []).every((c) => c.verdict === 'nucleo'), { n0, n1, l: log1.length });
     r = await p.call('deck_triangulate', { deckId: 1003, theme: 'Elementals' });
     check('triangulate: forced theme by name', r.json?.theme?.detected?.slug === 'elementals' && !r.json.sources.bracket, r.json?.theme);
     r = await p.call('deck_triangulate', { deckId: 1003, mode: 'xyz' });
@@ -189,12 +189,12 @@ async function phase3({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     const o = r.json || {};
     const ins = (o.swaps || []).map((s) => s.in.name);
     const outs = (o.swaps || []).map((s) => s.out.name);
-    check('optimize: proposes swaps with gains, reasons and a plan id', o.swaps?.length > 0 && o.swaps.every((s) => s.gain >= 2 && s.out.why && s.in.why && s.gainParts) && typeof o.planId === 'string', o);
+    check('optimize: proposes swaps with gains, reasons and an apply object (no plan id)', o.swaps?.length > 0 && o.swaps.every((s) => s.gain >= 2 && s.out.why && s.in.why && s.gainParts) && !('planId' in o) && o.apply?.swaps?.length === o.swaps.length && o.apply.swaps.every((x) => x.out && x.in), o);
     check('optimize: Game Changer leaves at bracket 2; no GC / banned / off-color comes in', outs.includes('The One Ring') && !ins.some((n) => ['Mana Crypt', 'Demonic Tutor', 'The One Ring', 'Counterspell'].includes(n)), { ins, outs });
     check('optimize: 2-card combo blocked at bracket 2 (Ooze + Eternal Witness)', !ins.includes('Scavenging Ooze'), ins);
     check('optimize: before/after objective and simulation reported', o.objective?.after?.score >= o.objective?.before?.score && o.simulation?.before?.score != null && o.simulation.after.games === 2000 && /Simulação/.test(o.summary?.[1] || ''), { obj: o.objective, sim: o.simulation });
     check('optimize: deck NOT changed', mockState.decks.get(1003).cards.some((c) => c.card.oracleCard.name === 'The One Ring'));
-    check('optimize: plan saved on disk', fs.readdirSync(path.join(h, 'data', 'plans', '1003')).some((f) => f.startsWith(o.planId)), o.planId);
+    check('optimize: nothing saved on disk (no plans folder)', !fs.existsSync(path.join(h, 'data', 'plans')));
     check('optimize: candidate sources listed (EDHREC lists / cache search)', o.swaps.every((s) => Array.isArray(s.in.sources) && s.in.sources.length > 0), o.swaps?.map((s) => s.in.sources));
 
     r = await p.call('deck_optimize', { deckId: 1003, targetBracket: 2, maxSwaps: 6, lock: ['The One Ring'], exclude: ['Cultivar'] });
@@ -204,22 +204,25 @@ async function phase3({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     r = await p.call('deck_optimize', { deckId: 1003, targetBracket: 2, minGain: 1e6 });
     check('optimize: huge minGain → only the mandatory bracket swap remains', r.json?.swaps?.length === 1 && /obrigatória/.test(r.json.swaps[0].forcedBy || '') && r.json.swaps[0].out.name === 'The One Ring', r.json?.swaps);
     r = await p.call('deck_optimize', { deckId: 1003, targetBracket: 4, minGain: 1e6 });
-    check('optimize: nothing good enough → no plan', r.json?.swaps?.length === 0 && r.json.planId === null, r.text.slice(0, 300));
+    check('optimize: nothing good enough → no apply object', r.json?.swaps?.length === 0 && !r.json.apply, r.text.slice(0, 300));
     r = await p.call('deck_optimize', { deckId: 1003, targetBracket: 2, maxSwaps: 3, lock: ['The One Ring'] });
     check('optimize: locked card above the bracket stays, with a note', !(r.json?.swaps || []).some((s) => s.out.name === 'The One Ring') && r.json.notes.some((n) => /lock/.test(n)), r.json?.notes);
 
-    // apply
-    r = await p.call('deck_optimize_apply', { deckId: 1003, planId: o.planId });
+    // apply (the swaps come back from the optimizer's answer; nothing is read from disk)
+    r = await p.call('deck_optimize_apply', { deckId: 1003, swaps: o.apply.swaps });
     check('apply without confirm → refused', r.isError && /confirm/.test(r.text), r.text);
-    r = await p.call('deck_optimize_apply', { deckId: 1003, planId: o.planId, confirm: true, swaps: [99] });
-    check('apply with unknown swap number → error', r.isError, r.text);
-    const snapsBefore = fs.existsSync(path.join(h, 'data', 'snapshots', '1003')) ? fs.readdirSync(path.join(h, 'data', 'snapshots', '1003')).length : 0;
-    r = await p.call('deck_optimize_apply', { deckId: 1003, planId: o.planId, confirm: true, swaps: [1] });
+    r = await p.call('deck_optimize_apply', { deckId: 1003, confirm: true, swaps: [{ out: 'Colossal Dreadmaw' }] });
+    check('apply with an incomplete swap → error', r.isError && /out.*in|in.*out/.test(r.text), r.text);
+    r = await p.call('deck_optimize_apply', { deckId: 1003, confirm: true, swaps: [{ out: 'Colossal Dreadmaw', in: 'Counterspell' }] });
+    check('apply: off-color incoming card skipped', (r.json?.skipped || []).some((x) => /identidade de cor/.test(x.reason)) && (r.json.applied || []).length === 0, r.text.slice(0, 400));
+    r = await p.call('deck_optimize_apply', { deckId: 1003, confirm: true, swaps: [o.apply.swaps[0]] });
     const a = r.json || {};
     const deckNow = mockState.decks.get(1003).cards.filter((c) => !c.deletedAt).map((c) => c.card.oracleCard.name);
-    check('apply: one swap applied (remove + add), verified, snapshot saved', a.applied?.length === 2 && /verified/.test(JSON.stringify(a.verification)) && deckNow.includes(o.swaps[0].in.name) && fs.readdirSync(path.join(h, 'data', 'snapshots', '1003')).length === snapsBefore + 1, a);
-    r = await p.call('deck_optimize_apply', { deckId: 1003, planId: o.planId, confirm: true, swaps: [1] });
+    check('apply: one swap applied (remove + add), verified, undo returned, nothing on disk', a.applied?.length === 2 && /verified/.test(JSON.stringify(a.verification)) && deckNow.includes(o.swaps[0].in.name) && Array.isArray(a.undo) && a.undo.length >= 2 && !fs.existsSync(path.join(h, 'data', 'snapshots')), a);
+    r = await p.call('deck_optimize_apply', { deckId: 1003, confirm: true, swaps: [o.apply.swaps[0]] });
     check('apply again: stale swap skipped, nothing applied', r.json?.skipped?.length === 1 && (r.json.applied || []).length === 0, r.text.slice(0, 400));
+    r = await p.call('deck_optimize_apply', { deckId: 1003, confirm: true, swaps: [{ out: 'Mountain', in: 'Forest' }] });
+    check('apply: a basic land may come in even if already in the deck', (r.json?.applied || []).length === 2 && !(r.json.skipped || []).length, r.text.slice(0, 400));
 
     // simulate
     r = await p.call('deck_simulate', { deckId: 1003, games: 500 });
