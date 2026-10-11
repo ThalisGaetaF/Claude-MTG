@@ -2,6 +2,12 @@
 
 Plugin do Claude (Cowork / Claude desktop) que conecta o Claude à sua conta do [Archidekt](https://archidekt.com) para **ver e editar sua coleção e seus decks**, **criar decks de Commander (EDH)**, validar as regras do formato e sugerir melhorias.
 
+**Novidades da versão 0.6.0 — extensão `.mcpb` (sem instalar Node)**
+
+- `manifest.json` + `.mcpbignore`: o servidor também é empacotado como extensão do Claude desktop (`.mcpb`), que roda com o Node embutido no app. E-mail, senha e pasta de dados são preenchidos na tela de configuração da extensão (senha marcada como sensível).
+- Campos opcionais deixados em branco (placeholders `${user_config.*}` não substituídos) são ignorados; o servidor cai no `credentials.json` / pasta padrão.
+- Instruções no README da raiz do repositório.
+
 **Novidades da versão 0.4.0 — foco em fluidez, EDHREC só como referência, identidade de cor garantida**
 
 - **Modelo próprio de avaliação**: cada carta é julgada pela função, custo, **fluidez** (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sinergia de texto com o comandante e com os temas que o próprio deck já tem. O EDHREC virou **um voto de referência** (~20% do valor) — sozinho ele nunca manda cortar uma carta.

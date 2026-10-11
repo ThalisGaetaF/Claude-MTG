@@ -4,8 +4,9 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { envValue } from './store.mjs';
 
-export const USER_AGENT = 'archidekt-commander-mcp/0.3';
+export const USER_AGENT = 'archidekt-commander-mcp/0.6';
 const DEFAULT_BASE = 'https://archidekt.com/api';
 const TIMEOUT_MS = 20_000;
 const MAX_429_RETRIES = 2;
@@ -28,7 +29,8 @@ export class ArchidektError extends Error {
 function credentialCandidates() {
   const home = os.homedir();
   const list = [];
-  if (process.env.ARCHIDEKT_CREDENTIALS_FILE) list.push(process.env.ARCHIDEKT_CREDENTIALS_FILE);
+  const custom = envValue('ARCHIDEKT_CREDENTIALS_FILE');
+  if (custom) list.push(custom);
   list.push(path.join(home, '.archidekt', 'credentials.json'));
   list.push(path.join(home, 'Projects', 'archidekt-mcp', 'credentials.json'));
   return list;
@@ -36,10 +38,10 @@ function credentialCandidates() {
 
 /** Returns {login, password, source} or null. `source` is a description safe to show. */
 export function loadCredentials() {
-  const env = process.env;
-  const envLogin = env.ARCHIDEKT_EMAIL || env.ARCHIDEKT_USERNAME;
-  if (envLogin && env.ARCHIDEKT_PASSWORD) {
-    return { login: envLogin, password: env.ARCHIDEKT_PASSWORD, source: 'environment variables' };
+  const envLogin = envValue('ARCHIDEKT_EMAIL') || envValue('ARCHIDEKT_USERNAME');
+  const envPassword = process.env.ARCHIDEKT_PASSWORD;
+  if (envLogin && envPassword && envValue('ARCHIDEKT_PASSWORD')) {
+    return { login: envLogin, password: envPassword, source: 'environment variables' };
   }
   for (const file of credentialCandidates()) {
     try {
@@ -57,7 +59,8 @@ export function loadCredentials() {
 }
 
 export const NOT_CONFIGURED_MESSAGE =
-  'Credenciais do Archidekt não configuradas. Crie o arquivo ' +
+  'Credenciais do Archidekt não configuradas. Na extensão (.mcpb), abra as configurações da extensão ' +
+  '"Archidekt Commander" no Claude e preencha e-mail e senha. No plugin, crie o arquivo ' +
   '%USERPROFILE%\\.archidekt\\credentials.json (ou %USERPROFILE%\\Projects\\archidekt-mcp\\credentials.json) ' +
   'com {"email": "...", "password": "..."}, ou defina as variáveis de ambiente ARCHIDEKT_EMAIL e ' +
   'ARCHIDEKT_PASSWORD (ou ARCHIDEKT_CREDENTIALS_FILE apontando para o JSON), e reinicie o Claude. ' +

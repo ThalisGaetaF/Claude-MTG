@@ -1,0 +1,215 @@
+{
+  "manifest_version": "0.3",
+  "name": "archidekt-commander",
+  "display_name": "Archidekt Commander",
+  "version": "0.6.0",
+  "description": "Veja e edite sua coleção e seus decks do Archidekt, crie e otimize decks de Commander (EDH), com nomes de cartas em português e preços em reais (LigaMagic).",
+  "long_description": "Servidor MCP que conecta o Claude à sua conta do Archidekt. Lê e edita coleção e decks, valida as regras do Commander (identidade de cor garantida em toda sugestão e escrita), analisa fluidez, sugere cortes e upgrades, roda um otimizador algorítmico com simulação Monte Carlo (EDHREC só como referência), traduz nomes de cartas PT ⇄ EN, consulta preços na LigaMagic e mantém uma wiki pessoal em Markdown. Usa o Node.js que já vem com o Claude desktop: não precisa instalar nada. Sem e-mail e senha, só as ferramentas públicas funcionam.",
+  "author": {
+    "name": "Thalis"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ThalisGaetaF/Claude-MTG"
+  },
+  "homepage": "https://github.com/ThalisGaetaF/Claude-MTG",
+  "server": {
+    "type": "node",
+    "entry_point": "server/index.mjs",
+    "mcp_config": {
+      "command": "node",
+      "args": [
+        "${__dirname}/server/index.mjs"
+      ],
+      "env": {
+        "ARCHIDEKT_EMAIL": "${user_config.email}",
+        "ARCHIDEKT_PASSWORD": "${user_config.password}",
+        "ARCHIDEKT_HOME": "${user_config.data_dir}"
+      }
+    }
+  },
+  "user_config": {
+    "email": {
+      "type": "string",
+      "title": "E-mail ou usuário do Archidekt",
+      "description": "O e-mail (ou nome de usuário) que você usa para entrar no archidekt.com. Deixe em branco para usar só as ferramentas públicas.",
+      "required": false
+    },
+    "password": {
+      "type": "string",
+      "title": "Senha do Archidekt",
+      "description": "Sua senha do archidekt.com. Fica guardada nas configurações do Claude e só é enviada ao Archidekt para fazer login.",
+      "sensitive": true,
+      "required": false
+    },
+    "data_dir": {
+      "type": "directory",
+      "title": "Pasta de dados (opcional)",
+      "description": "Onde guardar o cache de cartas, preços, snapshots e a wiki. Em branco: %USERPROFILE%\\.archidekt (ou %USERPROFILE%\\Projects\\archidekt-mcp, se existir).",
+      "required": false
+    }
+  },
+  "tools": [
+    {
+      "name": "archidekt_whoami",
+      "description": "Mostra o usuário Archidekt logado (id e username)"
+    },
+    {
+      "name": "archidekt_list_my_decks",
+      "description": "Lista os decks do usuário logado (inclui privados), do mais recente ao mais antigo: id, nome, formato, tamanho, cores, privado, updatedAt, url"
+    },
+    {
+      "name": "archidekt_search_decks",
+      "description": "Busca decks públicos no Archidekt por nome do deck, nome do comandante e/ou username do dono (60 por página)"
+    },
+    {
+      "name": "archidekt_get_deck",
+      "description": "Lê um deck: nome, formato, comandante(s), contagens, identidade de cor e cartas agrupadas por categoria (qtd, nome, MV, tipo, deckRelationId, cardid, set, owned)"
+    },
+    {
+      "name": "archidekt_search_cards",
+      "description": "Busca cartas (impressões) no banco do Archidekt: cardid, nome, set, número, acabamentos, tipo, MV, identidade de cor, legalidade em Commander, game changer"
+    },
+    {
+      "name": "archidekt_get_collection",
+      "description": "Lista a coleção do usuário logado (paginada): recordId, qtd, nome, set, acabamento, condição, idioma"
+    },
+    {
+      "name": "archidekt_search_collection",
+      "description": "Verifica quantas cópias o usuário possui de cada carta (por nome exato) e em quais registros da coleção"
+    },
+    {
+      "name": "archidekt_validate_deck",
+      "description": "Valida um deck de Commander: 100 cartas (só categorias incluídas no deck), singleton, identidade de cor, legalidade (banidas), comandante presente, e conta Game Changers"
+    },
+    {
+      "name": "archidekt_create_deck",
+      "description": "Cria um deck novo (privado por padrão) e, se informado, adiciona o comandante na categoria \"Commander\""
+    },
+    {
+      "name": "archidekt_update_deck_cards",
+      "description": "Altera cartas de um deck"
+    },
+    {
+      "name": "archidekt_update_deck_info",
+      "description": "Altera dados do deck: nome, descrição, privado/público, bracket EDH (1–5)"
+    },
+    {
+      "name": "archidekt_delete_deck",
+      "description": "APAGA um deck permanentemente"
+    },
+    {
+      "name": "archidekt_collection_add",
+      "description": "Adiciona cópias de uma carta à coleção (condition padrão NM, idioma EN)"
+    },
+    {
+      "name": "archidekt_collection_update",
+      "description": "Altera um registro da coleção (quantidade, condição, idioma, acabamento)"
+    },
+    {
+      "name": "archidekt_collection_remove",
+      "description": "REMOVE registros inteiros da coleção"
+    },
+    {
+      "name": "cards_cache_update",
+      "description": "Atualiza o cache local de cartas (Scryfall: oracle cards + tags de função + nomes em PT) em SEGUNDO PLANO e responde na hora (\"iniciado\" ou \"já atualizado em <data>\")"
+    },
+    {
+      "name": "cards_cache_status",
+      "description": "Status do cache local de cartas: job em andamento (etapa, progresso), última atualização, contagens, tamanhos, erros"
+    },
+    {
+      "name": "card_translate",
+      "description": "Traduz nomes de cartas PT⇄EN"
+    },
+    {
+      "name": "card_lookup",
+      "description": "Ficha completa de uma carta (aceita nome em PT ou EN): nome EN+PT, custo, tipo, texto, identidade de cor, papéis/tags, legalidade em Commander, Game Changer, rank EDHREC"
+    },
+    {
+      "name": "card_search_local",
+      "description": "Busca no cache local de cartas por papel (ramp, draw, removal, wipe, counter, tutor, protection, recursion, sac-outlet, gy-hate, tokens, landfall, lifegain, burn, evasion, anthem, wincon), texto, tipo"
+    },
+    {
+      "name": "card_price_br",
+      "description": "Preços em reais (R$) na LigaMagic para até 30 cartas (nome PT ou EN): mínimo, médio, máximo, até 5 variantes (edição/número), link e data da consulta"
+    },
+    {
+      "name": "deck_analyze",
+      "description": "Análise profunda de um deck, focada em deixá-lo melhor e mais fluido: funções vs metas (ramp, compra, remoção, wipes, proteção, tutores, recursão), mana (curva, MV médio, faixa de terrenos calculada p"
+    },
+    {
+      "name": "deck_cut_candidates",
+      "description": "Cartas candidatas a corte (menor nota do deck_analyze), sem o comandante e sem cartas de funções que já estão no mínimo; terrenos só se houver excesso"
+    },
+    {
+      "name": "deck_upgrade_candidates",
+      "description": "Sugestões de entrada para um deck, SEMPRE dentro da identidade de cor do comandante (cartas sem identidade confirmada no cache local são descartadas), legais e fora do deck"
+    },
+    {
+      "name": "deck_snapshot",
+      "description": "Salva uma foto da lista do deck (nome, qtd, categorias) em data/snapshots/<deckId>/"
+    },
+    {
+      "name": "deck_snapshot_list",
+      "description": "Lista os snapshots salvos de um deck (id, data, nota, contagem)"
+    },
+    {
+      "name": "deck_snapshot_diff",
+      "description": "Compara um snapshot (padrão: o mais recente) com o deck atual no Archidekt: cartas adicionadas, removidas, quantidades e categorias alteradas"
+    },
+    {
+      "name": "wiki_list",
+      "description": "Lista as páginas da wiki pessoal (Markdown): decks/…, meta/grupo, cartas/avaliacoes, arquetipos/…"
+    },
+    {
+      "name": "wiki_read",
+      "description": "Lê uma página da wiki pessoal, ex.: \"decks/toph\", \"meta/grupo\""
+    },
+    {
+      "name": "wiki_write",
+      "description": "Cria/substitui (mode \"replace\") ou acrescenta ao fim (mode \"append\") uma página da wiki pessoal"
+    },
+    {
+      "name": "wiki_search",
+      "description": "Busca texto na wiki pessoal (sem diferenciar maiúsculas/acentos); retorna página e linhas encontradas"
+    },
+    {
+      "name": "deck_triangulate",
+      "description": "Avalia CADA carta do deck com um modelo próprio — função (ramp/compra/remoção…), custo de mana, FLUIDEZ (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sine"
+    },
+    {
+      "name": "deck_optimize",
+      "description": "Otimizador algorítmico do deck (NÃO altera nada), focado em deixar o deck melhor e mais fluido — menos mãos travadas e turnos mortos"
+    },
+    {
+      "name": "deck_optimize_apply",
+      "description": "Aplica no Archidekt um plano gerado por deck_optimize (todas as trocas ou só as escolhidas em \"swaps\", numeradas a partir de 1)"
+    },
+    {
+      "name": "deck_simulate",
+      "description": "Simulação Monte Carlo \"goldfish\" do deck (padrão 2000 partidas, semente fixa): taxa de mulligan, descida de terreno no tempo (T1–T5), mana média por turno, comandante no turno certo, ramp até o T3, ma"
+    }
+  ],
+  "keywords": [
+    "archidekt",
+    "mtg",
+    "magic",
+    "commander",
+    "edh",
+    "deckbuilding",
+    "ligamagic",
+    "scryfall",
+    "edhrec"
+  ],
+  "compatibility": {
+    "platforms": [
+      "win32",
+      "darwin",
+      "linux"
+    ],
+    "runtimes": {
+      "node": ">=18.0.0"
+    }
+  }
+}

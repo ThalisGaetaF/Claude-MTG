@@ -4,13 +4,44 @@ Integração do Claude com o [Archidekt](https://archidekt.com) para Magic: The 
 
 | Pasta / arquivo | O que é |
 |---|---|
-| [`archidekt-commander/`](archidekt-commander/) | O plugin do Claude (v0.5.0): servidor MCP (`server/`), skill, agente `mtg-commander-expert` e testes. Detalhes no [README do plugin](archidekt-commander/README.md). |
+| [`archidekt-commander/`](archidekt-commander/) | O plugin do Claude (v0.6.0): servidor MCP (`server/`), skill, agente `mtg-commander-expert` e testes. Detalhes no [README do plugin](archidekt-commander/README.md). |
 | [`API_SPEC.md`](API_SPEC.md) | Notas sobre a API (não oficial) do Archidekt. |
 | [`wiki/`](wiki/) | Estrutura inicial e modelo da wiki pessoal de decks. |
+| [`dist/`](dist/) | Arquivos prontos: a extensão `archidekt-commander.mcpb` e a skill `archidekt-commander-skill.zip`. |
+
+## Qual instalação escolher?
+
+| | Extensão `.mcpb` | Plugin `.plugin` |
+|---|---|---|
+| Precisa instalar Node.js? | **Não**: usa o Node que já vem no Claude desktop | Sim (18+) |
+| Onde ficam e-mail e senha | Na tela de configuração da extensão | Em `credentials.json` ou variáveis de ambiente |
+| Skill e agente especialista | Skill instalada à parte; sem agente | Já vêm junto |
+| Indicado para | Computador da empresa, sem permissão de instalar programas | Seu computador |
 
 ---
 
-## Passo a passo da instalação (Windows)
+## Instalação rápida: extensão `.mcpb` (sem Node)
+
+1. Baixe [`dist/archidekt-commander.mcpb`](dist/archidekt-commander.mcpb). No GitHub, abra o arquivo e clique em **Download raw file**.
+2. Dê dois cliques no arquivo, ou arraste-o para a janela do Claude desktop. Aparece a tela de instalação da extensão **Archidekt Commander**. Clique em **Instalar**.
+3. Na configuração da extensão, preencha:
+   - **E-mail ou usuário do Archidekt**;
+   - **Senha do Archidekt**, que fica guardada nas configurações do Claude e não aparece no chat;
+   - **Pasta de dados**, que é opcional. Em branco, os dados vão para `%USERPROFILE%\.archidekt`.
+4. Ative a extensão, se ela não ficar ativa sozinha, e abra uma conversa nova.
+5. Instale a skill, que ensina o Claude a usar as ferramentas do jeito certo (fluxo de análise, tabelas, links da LigaMagic):
+   1. baixe [`dist/archidekt-commander-skill.zip`](dist/archidekt-commander-skill.zip);
+   2. envie o ZIP na área de **Skills** das configurações do Claude.
+6. Teste: *"quem sou eu no Archidekt?"*. Depois siga o [passo 5](#5-gere-o-cache-de-cartas) para gerar o cache de cartas. Funciona igual nas duas instalações.
+
+Para trocar a senha, abra as configurações da extensão no Claude. Para atualizar, instale o `.mcpb` novo por cima.
+
+> Se o Claude mostrar erro de Node ao iniciar a extensão, confira se o app está atualizado. Versões antigas do Claude desktop não traziam o Node embutido.
+
+---
+
+## Instalação completa: plugin (com Node)
+
 
 ### 1. Instale o Node.js
 
@@ -103,6 +134,23 @@ Exemplos de pedidos:
 O Claude sempre mostra as mudanças e pede confirmação antes de alterar um deck.
 
 ---
+
+## Gerar a extensão `.mcpb` de novo
+
+Depois de mudar o código do servidor, gere a extensão de novo. Precisa de Node só nesta etapa:
+
+```powershell
+npx @anthropic-ai/mcpb validate archidekt-commander/manifest.json
+npx @anthropic-ai/mcpb pack archidekt-commander dist/archidekt-commander.mcpb
+```
+
+O `archidekt-commander/.mcpbignore` deixa testes, skill e agente fora do pacote. Lembre de manter a versão igual em `manifest.json`, `.claude-plugin/plugin.json` e `server/store.mjs`.
+
+Para gerar o ZIP da skill (PowerShell):
+
+```powershell
+Compress-Archive -Force archidekt-commander/skills/archidekt-commander dist/archidekt-commander-skill.zip
+```
 
 ## Rodar os testes
 

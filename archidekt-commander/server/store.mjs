@@ -5,12 +5,25 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const VERSION = '0.3.0';
-export const USER_AGENT = `archidekt-commander-mcp/0.3`;
+export const VERSION = '0.6.0';
+export const USER_AGENT = `archidekt-commander-mcp/0.6`;
+
+/**
+ * Reads an environment variable, treating empty values and unreplaced placeholders
+ * (e.g. "${user_config.data_dir}" left by an MCPB host when an optional field is blank) as unset.
+ */
+export function envValue(name) {
+  const v = process.env[name];
+  if (v === undefined) return undefined;
+  const t = String(v).trim();
+  if (!t || /^\$\{[^}]*\}$/.test(t)) return undefined;
+  return t;
+}
 
 /** Root folder: ARCHIDEKT_HOME, else ~/Projects/archidekt-mcp if it exists, else ~/.archidekt. */
 export function homeDir() {
-  if (process.env.ARCHIDEKT_HOME) return path.resolve(process.env.ARCHIDEKT_HOME);
+  const custom = envValue('ARCHIDEKT_HOME');
+  if (custom) return path.resolve(custom);
   const projects = path.join(os.homedir(), 'Projects', 'archidekt-mcp');
   try {
     if (fs.statSync(projects).isDirectory()) return projects;

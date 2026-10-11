@@ -163,7 +163,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     const ptj = JSON.parse(fs.readFileSync(path.join(dataDir, 'pt-names.json'), 'utf8'));
     check('pt-names: PT → EN and most common EN → PT', ptj.pt['anel solar'] === 'Sol Ring' && ptj.en['Lightning Bolt'] === 'Relâmpago' && ptj.pt['raio'] === 'Lightning Bolt', ptj.en);
     check('pt-names: DFC face printed names', ptj.pt['despertar de valakut'] === 'Valakut Awakening // Valakut Stoneforge');
-    check('Scryfall requests use honest UA', (await extLog()).filter((x) => x.path.startsWith('/scryfall')).every((x) => x.ua === 'archidekt-commander-mcp/0.3'));
+    check('Scryfall requests use honest UA', (await extLog()).filter((x) => x.path.startsWith('/scryfall')).every((x) => x.ua === 'archidekt-commander-mcp/0.6'));
     r = await p1.call('cards_cache_update', {});
     check('fresh cache → "já atualizado em <data>"', r.json?.started === false && /já atualizado em \d{4}-/.test(r.json?.status), r.text);
 

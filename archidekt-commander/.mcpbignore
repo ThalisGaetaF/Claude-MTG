@@ -1,0 +1,8 @@
+tests/
+skills/
+agents/
+.claude-plugin/
+.mcp.json
+README.md
+*.mcpb
+*.plugin

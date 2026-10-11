@@ -143,7 +143,7 @@ try {
   ];
   check('tools/list exposes all 35 tools', expected.every((n) => names.includes(n)) && names.length === expected.length, names);
   check('tool names are unique', new Set(names).size === names.length);
-  check('initialize reports version 0.3.0', init.result?.serverInfo?.version === '0.3.0', init.result?.serverInfo);
+  check('initialize reports version 0.6.0', init.result?.serverInfo?.version === '0.6.0', init.result?.serverInfo);
   check('every tool has an object inputSchema', list.result.tools.every((t) => t.inputSchema?.type === 'object'));
   // Structural JSON Schema check (draft 2020-12 subset used by MCP clients).
   const schemaErrors = [];
@@ -383,7 +383,7 @@ try {
   check('collection_remove verified', r.json?.verification === 'verified' && !state.collection.has(9004), r.text);
 
   // ---- hygiene ----
-  check('every request uses honest User-Agent', state.log.every((x) => x.ua === 'archidekt-commander-mcp/0.3'));
+  check('every request uses honest User-Agent', state.log.every((x) => x.ua === 'archidekt-commander-mcp/0.6'));
   check('auth header scheme is JWT', state.log.filter((x) => x.auth).every((x) => x.auth === 'JWT'));
   check('password never in tool output', outputs.every((t) => !t.includes(MOCK_USER.password)));
   check('password/token never in stderr', !s.stderr.includes(MOCK_USER.password) && !/eyJ[A-Za-z0-9_-]{10,}/.test(s.stderr), s.stderr);
@@ -443,6 +443,29 @@ try {
   check('wrong password not in stderr', !badRun.stderr.includes('wrong-pass-zzz'), badRun.stderr);
 } finally {
   await badRun.close();
+}
+
+// MCPB extension: credentials from user_config env, optional fields left as "${user_config.x}" placeholders
+{
+  const extRun = new McpProc(baseEnv({ ARCHIDEKT_API_BASE: base, HOME: tmpHome, USERPROFILE: tmpHome,
+    ARCHIDEKT_EMAIL: MOCK_USER.email, ARCHIDEKT_PASSWORD: MOCK_USER.password, ARCHIDEKT_HOME: '${user_config.data_dir}' }));
+  try {
+    await extRun.init();
+    const r = await extRun.call('archidekt_whoami');
+    check('MCPB env credentials work; placeholder ARCHIDEKT_HOME ignored', r.json?.username === 'thalis' && /environment/.test(r.json?.credentialsSource || ''), r.text);
+    check('placeholder data dir not used', !extRun.stderr.includes('user_config'), extRun.stderr);
+  } finally {
+    await extRun.close();
+  }
+  const phRun = new McpProc(baseEnv({ ARCHIDEKT_API_BASE: base, HOME: tmpHome, USERPROFILE: tmpHome,
+    ARCHIDEKT_EMAIL: '${user_config.email}', ARCHIDEKT_PASSWORD: '${user_config.password}' }));
+  try {
+    await phRun.init();
+    const r = await phRun.call('archidekt_whoami');
+    check('unreplaced placeholder credentials ignored → falls back to file', r.isError && /Login no Archidekt falhou/.test(r.text), r.text);
+  } finally {
+    await phRun.close();
+  }
 }
 
 // ======================= stdin close with in-flight call =======================
