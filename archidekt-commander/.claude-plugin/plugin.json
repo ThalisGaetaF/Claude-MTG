@@ -1,7 +1,7 @@
 {
   "name": "archidekt-commander",
   "version": "0.7.0",
-  "description": "Integração do Claude com o Archidekt: ver e editar sua coleção e seus decks, criar decks de Commander (EDH), validar regras (identidade de cor garantida em toda sugestão e escrita), análise sempre do zero (sem cache sobre o deck) com nota por área, motor do plano e opções de melhoria testadas em simulação, cortes e upgrades, otimizador algorítmico com modelo próprio e EDHREC só como referência, simulação Monte Carlo, nomes de cartas em português, preços em reais (LigaMagic) e uma wiki pessoal de anotações. Respostas padronizadas: links da LigaMagic em cada carta, tabelas fixas e resumo rápido no final.",
+  "description": "Claude × Archidekt: veja e edite coleção e decks de Commander, valide regras (identidade de cor garantida), análise sempre do zero com nota por área, motor do plano e opções de melhoria testadas em simulação, otimizador (EDHREC só como referência), nomes em português e preços em reais (LigaMagic).",
   "author": {
     "name": "Thalis"
   },
