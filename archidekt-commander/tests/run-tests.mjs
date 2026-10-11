@@ -143,7 +143,7 @@ try {
   ];
   check('tools/list exposes all 32 tools (no snapshot tools)', expected.every((n) => names.includes(n)) && names.length === expected.length, names);
   check('tool names are unique', new Set(names).size === names.length);
-  check('initialize reports version 0.7.0', init.result?.serverInfo?.version === '0.7.0', init.result?.serverInfo);
+  check('initialize reports version 0.7.1', init.result?.serverInfo?.version === '0.7.1', init.result?.serverInfo);
   check('every tool has an object inputSchema', list.result.tools.every((t) => t.inputSchema?.type === 'object'));
   // Structural JSON Schema check (draft 2020-12 subset used by MCP clients).
   const schemaErrors = [];

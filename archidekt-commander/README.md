@@ -8,9 +8,11 @@ Plugin do Claude (Cowork / Claude desktop) que conecta o Claude à sua conta do 
 - Campos opcionais deixados em branco (placeholders `${user_config.*}` não substituídos) são ignorados; o servidor cai no `credentials.json` / pasta padrão.
 - Instruções no README da raiz do repositório.
 
+**Versão 0.7.1** — volta o cache de **dados de cartas** (páginas de carta do EDHREC por 7 dias, preços da LigaMagic por 24 h): buscas repetidas ficam instantâneas. Dados do deck continuam sempre ao vivo.
+
 **Novidades da versão 0.7.0 — análise sempre do zero e com opções de melhoria**
 
-- **Nada de cache sobre o deck**: a análise lê o deck e o EDHREC ao vivo a cada chamada; não usa nem grava notas da wiki, planos do otimizador, snapshots, páginas do EDHREC ou preços. Preços da LigaMagic também são sempre ao vivo. (O banco local de cartas do Scryfall continua: são só os textos/funções das cartas e os nomes em PT.)
+- **Nada de cache sobre o deck**: a análise lê o deck e as páginas do comandante no EDHREC ao vivo a cada chamada; não usa nem grava notas da wiki, planos do otimizador ou snapshots. Só **dados de cartas** ficam em cache, porque não dependem do deck: o banco do Scryfall (textos, funções, nomes em PT), as páginas de carta do EDHREC (7 dias) e os preços da LigaMagic (24 h).
 - **`deck_analyze` muito mais completo**: diagnóstico com números, **nota 0–10 por área** (base de mana, início de jogo, gás, interação, plano, resiliência, qualidade das cartas), **motor do plano** (habilitadores × payoffs de cada tema, finalizadores, motores de compra, ramp × gás), simulação de 2000 partidas e a avaliação de cada carta pelo mesmo modelo do otimizador.
 - **Opções de melhoria prontas**: pacotes de até 4 trocas, cada um mirando um problema (cartas fracas, gás, começo de jogo, curva, interação, plano, base de mana), dentro da identidade de cor, testados na simulação (antes × depois) e ordenados pelo efeito. Para aplicar: `deck_optimize_apply` com as trocas escolhidas.
 - **Sem snapshots/planos em disco**: `deck_optimize` devolve as trocas na própria resposta; `deck_optimize_apply` recebe `{out, in}`; toda escrita devolve `undo` (como desfazer). Ferramentas `deck_snapshot*` removidas.
@@ -157,7 +159,8 @@ Toda resposta segue o mesmo padrão (`skills/archidekt-commander/references/outp
 Pasta: `ARCHIDEKT_HOME` (se definida) → senão `%USERPROFILE%\Projects\archidekt-mcp` (se existir) → senão `%USERPROFILE%\.archidekt`. Dentro dela:
 
 - `data\cards.json`, `data\pt-names.json`, `data\cache-meta.json` — cache de cartas do Scryfall (**~15–20 MB** no total; o download é de ~31 MB compactados, processado em streaming).
-- Nada sobre os seus decks é guardado: análises, planos, snapshots, páginas do EDHREC e preços são consultados ao vivo a cada chamada.
+- `data\edhrec\cards\` (páginas de carta do EDHREC, 7 dias) e `data\ligamagic-prices.json` (preços, 24 h) — dados de cartas.
+- Nada sobre os seus decks é guardado: análises, planos, snapshots e páginas do comandante no EDHREC são consultados ao vivo a cada chamada.
 - `wiki\` — sua wiki (Markdown comum; pode abrir e editar no Bloco de Notas, VS Code, Obsidian…). Começa com `README.md` e o modelo `_templates\deck.md`.
 
 ### Atualizar o cache de cartas
@@ -166,9 +169,9 @@ O servidor atualiza sozinho, em segundo plano, quando o cache não existe ou tem
 
 ### Preços da LigaMagic — aviso
 
-A LigaMagic **não tem API pública**: o plugin lê a página de busca do site, de forma educada (no máximo uma consulta a cada 2 s, até 30 cartas por pedido, sempre ao vivo). Se o site bloquear o acesso automatizado (Cloudflare/captcha/403), o plugin para na hora, avisa e não tenta de novo por 15 minutos — confira no site. Mudanças no layout do site podem quebrar a leitura dos preços. Os preços são uma referência do momento da consulta (o Claude sempre cita "LigaMagic" e a data).
+A LigaMagic **não tem API pública**: o plugin lê a página de busca do site, de forma educada (no máximo uma consulta a cada 2 s, até 30 cartas por pedido, cache de 24 h por carta). Se o site bloquear o acesso automatizado (Cloudflare/captcha/403), o plugin para na hora, avisa e não tenta de novo por 15 minutos — confira no site. Mudanças no layout do site podem quebrar a leitura dos preços. Os preços são uma referência do momento da consulta (o Claude sempre cita "LigaMagic" e a data).
 
-Fontes externas usadas: Scryfall (API oficial, gratuita), EDHREC (JSON não oficial, consultado ao vivo, só como referência) e LigaMagic (página pública).
+Fontes externas usadas: Scryfall (API oficial, gratuita), EDHREC (JSON não oficial, só como referência: páginas do comandante ao vivo, páginas de carta em cache de 7 dias) e LigaMagic (página pública).
 
 ## Exemplos de pedidos
 
@@ -192,7 +195,7 @@ Fontes externas usadas: Scryfall (API oficial, gratuita), EDHREC (JSON não ofic
 - `archidekt_collection_update`/`_remove` sem nome de carta varrem a coleção página a página (lento em coleções grandes).
 - Preços vêm só da LigaMagic (veja o aviso acima); a análise usa heurísticas (funções por tags + texto, notas 0–100) — são um guia, não um veredito.
 - O otimizador usa heurísticas próprias e o EDHREC como referência; não testa o deck em partidas reais — a simulação é "goldfish" (sem oponentes). Use `lock` para manter cartas que você sabe que funcionam.
-- Cada `deck_analyze`/`deck_triangulate`/`deck_optimize` baixa ~7 páginas do EDHREC (1 s cada; mais as páginas das cartas duvidosas com `deep`) — não há cache, então cada análise leva de 10 a 40 s.
+- Cada `deck_analyze`/`deck_triangulate`/`deck_optimize` baixa ~7 páginas do comandante no EDHREC (1 s cada), então leva de 10 a 20 s; as páginas de carta (`deep`) só são baixadas na primeira vez em 7 dias.
 - `deck_upgrade_candidates` com preços pode levar ~1 minuto (confere a coleção carta a carta e espera 2 s entre consultas à LigaMagic).
 
 ## Desenvolvimento

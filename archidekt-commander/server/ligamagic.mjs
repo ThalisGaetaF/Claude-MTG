@@ -1,7 +1,10 @@
 // LigaMagic (Brazilian marketplace) price scraper. No public API: parses the server-rendered search page.
-// Gentle by design: ≥2 s between requests, always live (no disk cache), stops on the first sign of blocking.
+// Gentle by design: ≥2 s between requests, 24 h disk cache per card, stops on the first sign of blocking.
 
-import { callMemo, envInt, fetchWithTimeout, normName, Throttle, ToolError, USER_AGENT } from './store.mjs';
+import { dataDir, envInt, fetchWithTimeout, normName, readJson, Throttle, ToolError, USER_AGENT, writeJson } from './store.mjs';
+
+const CACHE_TTL_MS = 24 * 3600 * 1000;
+const cacheFile = () => dataDir('ligamagic-prices.json');
 
 const base = () => (process.env.LIGAMAGIC_BASE || 'https://www.ligamagic.com.br').replace(/\/+$/, '');
 const throttle = new Throttle(() => envInt('LIGAMAGIC_MIN_INTERVAL_MS', 2000));
@@ -172,17 +175,17 @@ export function summarize(rows, { en, pt }) {
   };
 }
 
-/**
- * Price already looked up in THIS tool call (per-call memo), or null. Prices are never kept between calls.
- */
+/** Price from the 24 h disk cache (a price is data about a card, not about a deck), or null. */
 export function cachedPrice({ en, pt, query }) {
-  const hit = callMemo('ligamagic').get(normName(en || pt || query));
-  return hit ? withLink(hit) : null;
+  const key = normName(en || pt || query);
+  const hit = (readJson(cacheFile(), {}) || {})[key];
+  const age = hit ? Date.now() - Date.parse(hit.fetchedAt) : NaN;
+  return age >= 0 && age < CACHE_TTL_MS ? withLink({ ...hit, cached: true }) : null;
 }
 
 /**
- * Price for one card, always live. `names` = {en, pt} (either may be null); `query` is what to search for.
- * Returns {en, pt, min, avg, max, variants, url, fetchedAt, source}.
+ * Price for one card (24 h disk cache, then live). `names` = {en, pt} (either may be null); `query` is what
+ * to search for. Returns {en, pt, min, avg, max, variants, url, fetchedAt, source, cached}.
  */
 export async function priceFor({ en, pt, query }, { deadline = null } = {}) {
   const key = normName(en || pt || query);
@@ -194,8 +197,16 @@ export async function priceFor({ en, pt, query }, { deadline = null } = {}) {
   const info = matched.length
     ? { ...summarize(matched, { en, pt }), found: true, fetchedAt: new Date().toISOString(), source: 'LigaMagic' }
     : { en: en ?? null, pt: pt ?? null, found: false, searchUrl: searchUrl(query || pt || en), fetchedAt: new Date().toISOString(), source: 'LigaMagic' };
-  callMemo('ligamagic').set(key, info);
-  return withLink(info);
+  // "Not found" is cached too (24 h): asking again would only spend LigaMagic requests.
+  try {
+    const fresh = readJson(cacheFile(), {}) || {};
+    for (const [k, v] of Object.entries(fresh)) if (!v?.fetchedAt || Date.now() - Date.parse(v.fetchedAt) > CACHE_TTL_MS * 7) delete fresh[k];
+    fresh[key] = info;
+    writeJson(cacheFile(), fresh);
+  } catch {
+    /* cache is best-effort */
+  }
+  return withLink({ ...info, cached: false });
 }
 
 /** Adds `ligamagicUrl` (card page) to a price result. */

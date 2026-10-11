@@ -72,7 +72,10 @@ Root folder: `ARCHIDEKT_HOME` if set, else `%USERPROFILE%\Projects\archidekt-mcp
 | `data/cache-meta.json` | updatedAt, counts, sources, durationMs, errors | — |
 | `wiki/` | Personal Markdown wiki (written only when the user asks) | kept |
 
-Nothing about a deck is stored: no analysis results, no optimizer plans, no snapshots, no EDHREC pages, no prices. Every deck analysis reads the deck and EDHREC live; LigaMagic prices are fetched live. Inside one tool call the same page is fetched only once (in-memory, discarded at the end of the call). Writes return `undo` (the changes that revert them) instead of a snapshot file.
+| `data/edhrec/cards/<slug>.json` | EDHREC card pages (global popularity of a card; 404s kept 1 day) | 7 days |
+| `data/ligamagic-prices.json` | LigaMagic prices per card | 24 h |
+
+Only card data is cached. Nothing about a deck is stored: no analysis results, no optimizer plans, no snapshots, no commander/theme/bracket/average-deck/combo pages — every deck analysis reads the deck and those EDHREC pages live. Inside one tool call the same page is fetched only once. Writes return `undo` (the changes that revert them) instead of a snapshot file.
 
 ## Roles
 
@@ -129,7 +132,7 @@ Scores sort; they don't decide. Read `why` and use judgement (a 6-MV finisher ma
 
 ## LigaMagic
 
-No public API: the server reads the search page. It uses the plain-name row (aggregate across editions) and lists up to 5 variants, ignoring Art Cards. "R$ 0,00" = no stock (`null`). ≥ 2 s between requests, always live (no cache), ≤ 30 cards per call. A 403/429/503, Cloudflare or captcha page stops the batch ("LigaMagic bloqueou acesso automatizado") and pauses LigaMagic for 15 minutes — no retries. If the site layout changes, prices stop appearing: say so and point to the site.
+No public API: the server reads the search page. It uses the plain-name row (aggregate across editions) and lists up to 5 variants, ignoring Art Cards. "R$ 0,00" = no stock (`null`). ≥ 2 s between requests, 24 h cache per card, ≤ 30 cards per call. A 403/429/503, Cloudflare or captcha page stops the batch ("LigaMagic bloqueou acesso automatizado") and pauses LigaMagic for 15 minutes — no retries. If the site layout changes, prices stop appearing: say so and point to the site.
 
 ## EDHREC
 

@@ -120,7 +120,7 @@ and one line of effect: `Efeito: simulação 91,6 → 92,0 · sem cartas no T6 1
 | [Sol Ring](url)<br><sub>Anel Solar</sub> | R$ 7,09 | R$ 67,83 | #249 |
 | **Total** | **R$ 7,09** | **R$ 67,83** | |
 
-<sub>Fonte: LigaMagic, consulta ao vivo em 11/10/2026.</sub>
+<sub>Fonte: LigaMagic, 11/10/2026 (cache de 24 h).</sub>
 
 **Funções do deck** (`deck_analyze` roles)
 

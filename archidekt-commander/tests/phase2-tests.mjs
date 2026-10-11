@@ -218,7 +218,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     let n1 = (await extLog()).filter((x) => x.path.startsWith('/liga')).length;
     r = await p1.call('card_price_br', { names: ['Sol Ring'] });
     const n2 = (await extLog()).filter((x) => x.path.startsWith('/liga')).length;
-    check('price: always live (new request, nothing stored on disk)', r.json?.results?.[0]?.found === true && !('cached' in r.json.results[0]) && n2 > n1 && !fs.existsSync(path.join(dataDir, 'ligamagic-prices.json')), { n0, n1, n2, t: r.text });
+    check('price: 24 h disk cache hit (no new request)', r.json?.results?.[0]?.cached === true && n2 === n1 && fs.existsSync(path.join(dataDir, 'ligamagic-prices.json')), { n0, n1, n2, t: r.text });
     check('price: single card has no totalBRL', r.json && !('totalBRL' in r.json));
     r = await p1.call('card_price_br', { names: ['Blocked Card', 'Cultivar Nope'] });
     check('price: 403/Cloudflare → clear blocked message, rest skipped', /bloqueou/.test(r.json?.blocked || '') && /bloqueou/.test(r.json.results[0].error) && /não consultado/.test(r.json.results[1].error), r.text);
@@ -292,7 +292,7 @@ async function phase2({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     n1 = (await extLog()).filter((x) => x.path.startsWith('/edhrec')).length;
     check('analyze: lock/exclude respected in the options', !(r.json?.options || []).some((o) => o.swaps.some((s) => s.out.name === 'Colossal Dreadmaw' || s.in.name === optIns[0])), r.json?.options?.map((o) => o.swaps.map((s) => `${s.out.name}>${s.in.name}`)));
     const commanderHits = (await extLog()).filter((x) => x.path === '/edhrec/pages/commanders/omnath-locus-of-rage.json').length;
-    check('EDHREC always live: the second analysis fetches the commander page again, nothing stored on disk', commanderHits >= 2 && n1 > n0 && !fs.existsSync(path.join(dataDir, 'edhrec')), { n0, n1, commanderHits });
+    check('EDHREC commander pages always live: the second analysis fetches them again, none stored on disk', commanderHits >= 2 && n1 > n0 && !fs.existsSync(path.join(dataDir, 'edhrec', 'omnath-locus-of-rage.json')), { n0, n1, commanderHits });
     r = await p1.call('deck_analyze', { deckId: 1003, targetBracket: 4 });
     check('analyze with a high target bracket: no bracket issue', !r.json?.issues?.some((i) => i.area === 'bracket'), r.json?.issues);
     r = await p1.call('deck_analyze', { deckId: 2001 });
@@ -615,7 +615,7 @@ export async function runReviewFixes({ McpProc, baseEnv, check, ext, archBase, M
     const limited = (r.json?.results || []).filter((x) => /limite de tempo/.test(x.error || '')).length;
     check('card_price_br respects the per-call time budget (stops, reports, no failure)', !r.isError && dt < 7000 && limited >= 2 && /limite de tempo/.test(r.json.timeLimited || ''), { dt, r: r.text.slice(0, 600) });
     r = await p.call('card_price_br', { names: ['Zz One'] });
-    check('a later call asks LigaMagic again (no cache between calls)', !r.json?.results?.[0]?.cached && r.json.results[0].found === false && !fs.existsSync(path.join(hT, 'data', 'ligamagic-prices.json')), r.text);
+    check('prices fetched before the limit are cached (incl. "not found")', r.json?.results?.[0]?.cached === true && r.json.results[0].found === false, r.text);
     r = await p.call('card_price_br', { names: ['Login Form Card'] });
     check('page mentioning recaptcha (no results) is not treated as a block', !r.json?.blocked && r.json?.results?.[0]?.found === false, r.text);
     const t1 = Date.now();

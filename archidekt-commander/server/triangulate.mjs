@@ -16,7 +16,7 @@
 // and how much they agree. Pure functions except loadContext (network, through edhrec.mjs).
 
 import { cardInfo, commanderThemes, heuristicSynergy, rolePt } from './analysis.mjs';
-import { averageDeck, BRACKET_SLUGS, cardPage, combosFor, commanderPageSafe } from './edhrec.mjs';
+import { averageDeck, BRACKET_SLUGS, cardPage, cardPageCached, combosFor, commanderPageSafe } from './edhrec.mjs';
 import { cardFluidity } from './fluidity.mjs';
 import { CORE_ROLES } from './roles.mjs';
 import { normName } from './store.mjs';
@@ -129,14 +129,15 @@ export async function fetchCardPages(ctx, names, { deadline = Infinity, max = 25
   for (const n of names) {
     const k = normName(n);
     if (ctx.cardPages.has(k)) continue;
-    if (fetched >= max || deadline - Date.now() < 2500) {
+    const cached = cardPageCached(n);
+    if (!cached && (fetched >= max || deadline - Date.now() < 2500)) {
       skipped++;
       continue;
     }
     try {
       const p = await cardPage(n);
       ctx.cardPages.set(k, p);
-      fetched++;
+      if (!p.cached) fetched++;
     } catch (e) {
       ctx.cardPages.set(k, { found: false, error: e.message });
     }

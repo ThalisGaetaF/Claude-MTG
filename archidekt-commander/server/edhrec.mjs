@@ -7,10 +7,16 @@
 //   /pages/average-decks/<slug>[/<variant>].json  average deck: deck.cards = {Type: [[name, qty]…]}
 //   /pages/combos/<slug>.json                  combos: cardlists[] = {combo:{count, percentage, results, comboVote}, cardviews}
 //   /pages/cards/<card-slug>.json              card page: card {num_decks, potential_decks, salt}, "Top Commanders" list
-// Missing pages answer 403/404. Always fetched live (no disk cache), ≥1 s between requests.
+// Missing pages answer 403/404. ≥1 s between requests. Pages about the commander/deck (commander, theme,
+// bracket, average deck, combos) are always fetched live; CARD pages (data about a card, not about a deck)
+// are kept on disk for 7 days (data/edhrec/cards/), 404s for 1 day.
 
 import path from 'node:path';
-import { callMemo, envInt, fetchWithTimeout, normName, Throttle, ToolError, USER_AGENT } from './store.mjs';
+import { callMemo, dataDir, envInt, fetchWithTimeout, normName, readJson, Throttle, ToolError, USER_AGENT, writeJson } from './store.mjs';
+
+const CARD_TTL_MS = 7 * 24 * 3600 * 1000;
+const CARD_NOT_FOUND_TTL_MS = 24 * 3600 * 1000;
+const cardFile = (slug) => dataDir('edhrec', 'cards', `${slug}.json`);
 
 const base = () => (process.env.EDHREC_BASE || 'https://json.edhrec.com').replace(/\/+$/, '');
 const throttle = new Throttle(() => envInt('EDHREC_MIN_INTERVAL_MS', 1000));
@@ -270,11 +276,39 @@ function expandCard(d, slug) {
 export async function cardPage(name) {
   const tries = [...new Set([slugOf(name), slugOf(name, { frontOnly: false })].filter(Boolean))];
   for (const slug of tries) {
-    const r = await getPage(`/pages/cards/${slug}.json`, compactCardPage);
+    const r = await cardPageCachedOrLive(slug);
     if (!r.found) continue;
     const want = normName(String(name).split(' // ')[0]);
     if (r.data.name && !normName(r.data.name).startsWith(want)) continue; // another card with the same slug
-    return { ...expandCard(r.data, slug), fetchedAt: r.fetchedAt };
+    return { ...expandCard(r.data, slug), fetchedAt: r.fetchedAt, cached: !!r.cached };
   }
   return { found: false, slug: tries[0] };
+}
+
+/** Card page from the 7-day disk cache, else live (and saved). */
+async function cardPageCachedOrLive(slug) {
+  const file = cardFile(slug);
+  const c = readJson(file, null);
+  if (c?.fetchedAt) {
+    const age = Date.now() - Date.parse(c.fetchedAt);
+    if (c.notFound && age >= 0 && age < CARD_NOT_FOUND_TTL_MS) return { found: false, cached: true };
+    if (!c.notFound && c.data && age >= 0 && age < CARD_TTL_MS) return { found: true, data: c.data, fetchedAt: c.fetchedAt, cached: true };
+  }
+  const r = await getPage(`/pages/cards/${slug}.json`, compactCardPage);
+  try {
+    if (r.found) writeJson(file, { v: 2, fetchedAt: r.fetchedAt, data: r.data });
+    else if (!r.redirect) writeJson(file, { fetchedAt: new Date().toISOString(), notFound: true });
+  } catch {
+    /* cache is best-effort */
+  }
+  return r;
+}
+
+/** True when the card page is on disk and fresh — callers spend their time budget on new pages only. */
+export function cardPageCached(name) {
+  for (const slug of [slugOf(name), slugOf(name, { frontOnly: false })]) {
+    const c = readJson(cardFile(slug), null);
+    if (c?.fetchedAt && !c.notFound && Date.now() - Date.parse(c.fetchedAt) < CARD_TTL_MS) return true;
+  }
+  return false;
 }

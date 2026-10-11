@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const VERSION = '0.7.0';
+export const VERSION = '0.7.1';
 export const USER_AGENT = `archidekt-commander-mcp/0.7`;
 
 /**
@@ -176,7 +176,7 @@ export const todayIso = () => new Date().toISOString();
 export const fileStamp = (d = new Date()) => d.toISOString().replace(/[:.]/g, '-');
 
 // ---------------------------------------------------------------- per-call memo (no persistent cache)
-// Deck analysis never reuses data from earlier calls: EDHREC pages and LigaMagic prices are fetched live.
+// Deck analysis never reuses deck data from earlier calls: commander/theme/bracket pages are fetched live.
 // Inside ONE tool call the same page is fetched only once (e.g. a card page needed twice); the memo dies
 // with the call. Outside a call scope (tests, scripts) every lookup simply goes to the network.
 

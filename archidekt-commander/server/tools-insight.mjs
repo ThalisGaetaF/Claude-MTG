@@ -28,7 +28,7 @@ const inputError = (m) => new ToolError('input', m);
 // report what was skipped instead of making the whole call fail.
 const budgetMs = () => envInt('ARCHIDEKT_TOOL_BUDGET_MS', 40_000);
 const deadlineFromNow = () => Date.now() + budgetMs();
-const TIME_LIMIT = 'não consultado (limite de tempo da chamada; consulte de novo só esta carta com card_price_br)';
+const TIME_LIMIT = 'não consultado (limite de tempo da chamada; repita — as já consultadas ficam no cache de 24 h)';
 
 const ROLE_ALIASES = {
   remocao: 'removal', 'remoção': 'removal', removal: 'removal', compra: 'draw', draw: 'draw', 'card-draw': 'draw', 'card-advantage': 'draw',
@@ -108,7 +108,7 @@ export function buildInsightTools(ctx) {
 
   async function priceList(list, { deadline = deadlineFromNow() } = {}) {
     // list: [{en, pt, query}] → results; stops on blocking and when the time budget runs out
-    // (prices already fetched in this call are still returned after that).
+    // (cached prices are still returned after that).
     const out = [];
     let blocked = null;
     let timeLimited = 0;
@@ -302,7 +302,7 @@ export function buildInsightTools(ctx) {
     // ---------------- prices ----------------
     {
       name: 'card_price_br',
-      description: 'Preços em reais (R$) na LigaMagic para até 30 cartas (nome PT ou EN): mínimo, médio, máximo, até 5 variantes (edição/número), link e data da consulta. Sempre ao vivo (sem cache); ≥2 s entre consultas; se a LigaMagic bloquear, para e avisa. Sempre cite "LigaMagic" e a data.',
+      description: 'Preços em reais (R$) na LigaMagic para até 30 cartas (nome PT ou EN): mínimo, médio, máximo, até 5 variantes (edição/número), link e data da consulta. Cache de 24 h por carta (preço é dado da carta, não do deck); ≥2 s entre consultas novas; se a LigaMagic bloquear, para e avisa. Sempre cite "LigaMagic" e a data.',
       inputSchema: { type: 'object', properties: { names: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 30 } }, required: ['names'] },
       annotations: RO,
       handler: async (args) => {
@@ -326,7 +326,7 @@ export function buildInsightTools(ctx) {
           out.totalBRL = { min: s('min'), avg: s('avg'), cardsPriced: priced, incomplete: withMin < list.length || priced < list.length };
         }
         if (blocked) out.blocked = blocked;
-        if (timeLimited) out.timeLimited = `${timeLimited} carta(s) não consultada(s) por limite de tempo (≥2 s por consulta na LigaMagic). Consulte só as que faltaram numa nova chamada.`;
+        if (timeLimited) out.timeLimited = `${timeLimited} carta(s) não consultada(s) por limite de tempo (≥2 s por consulta na LigaMagic). Repita a chamada: as já consultadas vêm do cache de 24 h.`;
         return out;
       },
     },
@@ -632,7 +632,7 @@ export function buildInsightTools(ctx) {
         if (withPrices) {
           const top = ranked.slice(0, Math.min(15, count + (maxPrice != null ? 5 : 0)));
           const { results, blocked, timeLimited } = await priceList(top.map((c) => ({ en: c.name, pt: ptNameOf(c.name), query: ptNameOf(c.name) || c.name })), { deadline });
-          if (timeLimited) notes.push(`${timeLimited} preço(s) não consultado(s) por limite de tempo; use card_price_br só com essas cartas.`);
+          if (timeLimited) notes.push(`${timeLimited} preço(s) não consultado(s) por limite de tempo; repita (as já consultadas ficam no cache de 24 h) ou use card_price_br.`);
           top.forEach((c, i) => {
             const p = results[i];
             c.priceBRL = p?.found ? { min: p.min, avg: p.avg, fetchedAt: p.fetchedAt, url: p.url } : p?.error ? { error: p.error } : { found: false, searchUrl: p?.searchUrl ?? null };

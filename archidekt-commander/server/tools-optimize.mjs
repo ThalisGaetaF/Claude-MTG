@@ -142,7 +142,7 @@ export function buildOptimizeTools(ctxTools) {
   const triangulateTool = {
     name: 'deck_triangulate',
     description:
-      'Avalia CADA carta do deck com um modelo próprio — função (ramp/compra/remoção…), custo de mana, FLUIDEZ (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sinergia de texto com o comandante — e usa o EDHREC só como referência (comandante, tema detectado, bracket, deck médio e popularidade global contam como um único voto e ~20% do valor). Devolve para cada carta: valor 0–100, nota do modelo próprio, veredito (núcleo, sinergia, staple/função, aposta pessoal, duvidosa, corte provável), confiança (quantas fontes concordam) e os motivos. O EDHREC sozinho nunca manda cortar uma carta. deep=true busca a página individual das cartas duvidosas no EDHREC (≈1 s cada, sempre ao vivo — nada fica em cache entre chamadas).',
+      'Avalia CADA carta do deck com um modelo próprio — função (ramp/compra/remoção…), custo de mana, FLUIDEZ (barata, instantânea, compra/filtra, flexível, sem custo de cor pesado, não trava na mão) e sinergia de texto com o comandante — e usa o EDHREC só como referência (comandante, tema detectado, bracket, deck médio e popularidade global contam como um único voto e ~20% do valor). Devolve para cada carta: valor 0–100, nota do modelo próprio, veredito (núcleo, sinergia, staple/função, aposta pessoal, duvidosa, corte provável), confiança (quantas fontes concordam) e os motivos. O EDHREC sozinho nunca manda cortar uma carta. deep=true busca a página individual das cartas duvidosas no EDHREC (≈1 s cada na primeira vez; páginas de carta ficam em cache 7 dias — são dados da carta, não do deck).',
     inputSchema: {
       type: 'object',
       properties: {
@@ -168,7 +168,7 @@ export function buildOptimizeTools(ctxTools) {
       const nonland = tri.cards.filter((c) => !c.isLand);
       const notes = [...ctx.notes];
       if (!getCache()?.hasCards) notes.push('Cache local de cartas ausente: funções e rank vêm só do Archidekt/texto (rode cards_cache_update).');
-      if (deepInfo?.skipped) notes.push(`${deepInfo.skipped} página(s) de carta do EDHREC não foram consultadas (limite de tempo da chamada).`);
+      if (deepInfo?.skipped) notes.push(`${deepInfo.skipped} página(s) de carta do EDHREC ficaram para a próxima chamada (limite de tempo); repita — as já baixadas ficam no cache de 7 dias.`);
       const counts = Object.fromEntries(Object.entries(tri.counts).map(([k, v]) => [VERDICT_PT[k] || k, v]));
       return {
         deck: { id: deck.id, name: deck.name, commanders: ctx.commanders, identity: deck.identity, count: deck.mainCount },

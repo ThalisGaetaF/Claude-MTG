@@ -177,7 +177,8 @@ async function phase3({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     check('triangulate deep: card page evidence used (global inclusion)', /de todos os decks das suas cores/.test(by['Colossal Dreadmaw']?.why || ''), by['Colossal Dreadmaw']);
     r = await p.call('deck_triangulate', { deckId: 1003, targetBracket: 2, onlyVerdicts: ['nucleo'] });
     const n1 = (await extLog()).filter((x) => x.path.startsWith('/edhrec')).length;
-    check('triangulate: EDHREC always live (second call fetches the pages again, nothing on disk)', n1 - (n0 + log1.length) >= 3 && !fs.existsSync(path.join(h, 'data', 'edhrec')) && (r.json?.cards || []).every((c) => c.verdict === 'nucleo'), { n0, n1, l: log1.length });
+    const log2 = (await extLog()).filter((x) => x.path.startsWith('/edhrec')).slice(n0 + log1.length).map((x) => x.path);
+    check('triangulate: commander pages live again, card pages from the 7-day disk cache', log2.some((x) => x.includes('/commanders/omnath-locus-of-rage')) && !log2.some((x) => x.includes('/cards/colossal-dreadmaw')) && fs.existsSync(path.join(h, 'data', 'edhrec', 'cards', 'colossal-dreadmaw.json')) && !fs.existsSync(path.join(h, 'data', 'edhrec', 'omnath-locus-of-rage.json')) && (r.json?.cards || []).every((c) => c.verdict === 'nucleo'), { n0, n1, log2 });
     r = await p.call('deck_triangulate', { deckId: 1003, theme: 'Elementals' });
     check('triangulate: forced theme by name', r.json?.theme?.detected?.slug === 'elementals' && !r.json.sources.bracket, r.json?.theme);
     r = await p.call('deck_triangulate', { deckId: 1003, mode: 'xyz' });
