@@ -1,16 +1,114 @@
 # Claude-MTG
 
-Integração do Claude com o [Archidekt](https://archidekt.com) para Magic: The Gathering (Commander/EDH).
+Integração do Claude com o [Archidekt](https://archidekt.com) para Magic: The Gathering (Commander/EDH): ver e editar sua coleção e seus decks, criar decks, analisar e otimizar, nomes de cartas em português e preços em reais (LigaMagic).
 
-- [`archidekt-commander/`](archidekt-commander/) — plugin do Claude (Cowork / Claude desktop), v0.5.0: servidor MCP (`server/`), skill, agente `mtg-commander-expert` e testes (`tests/`). Veja o [README do plugin](archidekt-commander/README.md).
-- [`API_SPEC.md`](API_SPEC.md) — notas sobre a API do Archidekt.
-- [`wiki/`](wiki/) — estrutura e modelos da wiki pessoal de decks.
+| Pasta / arquivo | O que é |
+|---|---|
+| [`archidekt-commander/`](archidekt-commander/) | O plugin do Claude (v0.5.0): servidor MCP (`server/`), skill, agente `mtg-commander-expert` e testes. Detalhes no [README do plugin](archidekt-commander/README.md). |
+| [`API_SPEC.md`](API_SPEC.md) | Notas sobre a API (não oficial) do Archidekt. |
+| [`wiki/`](wiki/) | Estrutura inicial e modelo da wiki pessoal de decks. |
+
+---
+
+## Passo a passo da instalação (Windows)
+
+### 1. Instale o Node.js
+
+O servidor do plugin roda em Node.js 18 ou mais novo, sem dependências npm.
+
+1. Abra o PowerShell e rode `node -v`.
+2. Se o comando não existir ou a versão for menor que `v18`, instale a versão **LTS** em https://nodejs.org.
+3. Feche e abra o PowerShell de novo e confira `node -v`.
+
+### 2. Baixe o repositório
+
+```powershell
+cd $env:USERPROFILE\Projects
+git clone https://github.com/ThalisGaetaF/Claude-MTG.git
+```
+
+(Sem Git: no GitHub, clique em **Code → Download ZIP** e extraia em `C:\Users\<você>\Projects\Claude-MTG`.)
+
+### 3. Coloque as credenciais do Archidekt
+
+O plugin entra na sua conta do Archidekt com seu e-mail (ou nome de usuário) e senha. **Nunca cole a senha no chat do Claude.** Ela fica num arquivo local que não vai para o Git (está no `.gitignore`).
+
+1. Crie a pasta e abra o arquivo no Bloco de Notas:
+
+   ```powershell
+   New-Item -ItemType Directory -Force "$env:USERPROFILE\.archidekt" | Out-Null
+   notepad "$env:USERPROFILE\.archidekt\credentials.json"
+   ```
+
+2. Cole o conteúdo abaixo, troque pelos seus dados e salve:
+
+   ```json
+   { "email": "seu-email@exemplo.com", "password": "sua-senha" }
+   ```
+
+   Pode usar `"username"` no lugar de `"email"`.
+
+> **Alternativas.** O plugin procura as credenciais nesta ordem:
+> 1. variáveis de ambiente `ARCHIDEKT_EMAIL` (ou `ARCHIDEKT_USERNAME`) e `ARCHIDEKT_PASSWORD`, criadas com `setx ARCHIDEKT_EMAIL "..."` e `setx ARCHIDEKT_PASSWORD "..."`;
+> 2. o arquivo indicado em `ARCHIDEKT_CREDENTIALS_FILE`;
+> 3. `%USERPROFILE%\.archidekt\credentials.json`;
+> 4. `%USERPROFILE%\Projects\archidekt-mcp\credentials.json`.
+>
+> Sem credenciais, só as ferramentas públicas funcionam (buscar cartas, buscar decks e ver decks públicos). O token de login fica só na memória; nada é gravado em disco.
+
+### 4. Instale o plugin no Claude
+
+1. Gere o arquivo `.plugin` (um ZIP com o conteúdo da pasta `archidekt-commander`):
+
+   ```powershell
+   cd $env:USERPROFILE\Projects\Claude-MTG
+   Get-ChildItem -Force archidekt-commander |
+     Compress-Archive -DestinationPath archidekt-commander.zip -Force
+   Move-Item -Force archidekt-commander.zip archidekt-commander.plugin
+   ```
+
+   Confira que o ZIP tem `.claude-plugin\plugin.json` e `.mcp.json` na raiz, não dentro de uma subpasta.
+
+2. No app **Claude desktop** (Cowork), arraste o `archidekt-commander.plugin` para a conversa, ou abra o arquivo pelo app, e confirme a instalação.
+3. **Feche e abra o Claude** para o servidor `archidekt` subir com as credenciais.
+4. Teste numa conversa nova: *"quem sou eu no Archidekt?"*. O Claude deve chamar `archidekt_whoami` e responder com seu usuário.
+
+   - Se aparecer *"credenciais não configuradas"*, revise o passo 3 (nome do arquivo, JSON válido, aspas retas) e reinicie o Claude.
+   - Se der erro de login, confira e-mail e senha entrando em archidekt.com.
+
+> **Para atualizar o plugin:** rode `git pull`, gere o `.plugin` de novo (passo 4.1), reinstale e reinicie o Claude.
+
+### 5. Gere o cache de cartas
+
+O cache local (dados do Scryfall com a função de cada carta e os **nomes em português**) é usado na análise, nas traduções e na checagem de identidade de cor.
+
+- **Automático:** quando o servidor sobe e o cache não existe ou tem mais de 7 dias, ele começa a baixar sozinho, em segundo plano. Na primeira vez leva uns **2 a 5 minutos** (cerca de 31 MB do Scryfall mais ~230 páginas de nomes em PT).
+- **Manual:** peça ao Claude *"atualiza o cache de cartas"* (`cards_cache_update` com `force: true`).
+- **Acompanhar:** peça *"status do cache"* (`cards_cache_status`). Mostra o andamento, a data da última atualização, as contagens e eventuais erros. Se uma etapa falhar, o que já deu certo é mantido.
+
+Os dados ficam em `%USERPROFILE%\Projects\archidekt-mcp\data\` se essa pasta existir; se não, em `%USERPROFILE%\.archidekt\data\`. Para escolher outra pasta, defina `ARCHIDEKT_HOME`. O cache ocupa uns 15 a 20 MB. Para desligar a atualização automática, defina `ARCHIDEKT_NO_AUTO_CACHE=1`.
+
+Preços da LigaMagic (24 h) e páginas do EDHREC (7 dias) são guardados no cache conforme você usa. Não precisa gerar nada antes.
+
+### 6. Pronto, é só usar
+
+Exemplos de pedidos:
+
+- *"Lista meus decks do Archidekt"*
+- *"Analisa meu deck da Toph e sugere cortes"*
+- *"Otimiza o deck do Quintorius, bracket 3"*
+- *"Quanto custa Anel Solar na LigaMagic?"*
+- *"Monta um deck de Atraxa só com cartas da minha coleção"*
+
+O Claude sempre mostra as mudanças e pede confirmação antes de alterar um deck.
+
+---
 
 ## Rodar os testes
 
-```bash
+```powershell
 cd archidekt-commander
 node tests/run-tests.mjs
 ```
 
-Credenciais do Archidekt ficam em `~/.archidekt/credentials.json` (fora do repositório).
+Os testes usam mocks locais do Archidekt, Scryfall, LigaMagic e EDHREC. Não precisam de credenciais nem de internet.
