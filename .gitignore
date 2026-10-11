@@ -1,0 +1,6 @@
+credentials.json
+*.tgz
+*.plugin
+node_modules/
+data/
+.archidekt/
