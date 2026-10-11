@@ -229,6 +229,8 @@ async function phase3({ McpProc, baseEnv, check, ext, mockState, archBase, MOCK_
     check('simulate: report + assumptions', r.json?.simulation?.games === 500 && typeof r.json.simulation.score === 'number' && /mulligan/.test(r.json.assumptions), r.text.slice(0, 300));
     r = await p.call('deck_simulate', { deckId: 1003, games: 500, remove: ['Floresta', 'Forest', 'Forest'], add: ['Cultivate', 'Rampant Growth', 'Carta Inexistente'] });
     check('simulate what-if: delta and ignored names', typeof r.json?.whatIf?.delta === 'number' && r.json.whatIf.ignored?.length >= 1, r.json?.whatIf);
+    r = await p.call('deck_simulate', { deckId: 1003, games: 300, remove: ['Mountain'], add: ['Forest'] });
+    check('simulate what-if: swapping one basic for another keeps the card count', r.json?.whatIf?.cards === r.json?.deck?.count, r.json?.whatIf);
     r = await p.call('deck_simulate', { deckId: 1003, games: 10 });
     check('simulate: games below minimum → error', r.isError, r.text);
     r = await p.call('deck_simulate', { deckId: 1003, games: 300, add: ['Demonic Tutor'] });

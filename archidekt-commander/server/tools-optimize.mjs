@@ -491,6 +491,7 @@ export function buildOptimizeTools(ctxTools) {
           const rec = findCard(loc?.en || n);
           if (!rec) missing.push(`${n} (fora do cache)`);
           else if (deck.commanders.length && !withinIdentity(rec.ci, deckIdentityOf(deck, findCard))) missing.push(`${n} (fora da identidade de cor ${deckIdentityOf(deck, findCard)})`);
+          else if (alt.has(normName(rec.name))) alt.get(normName(rec.name)).qty += 1; // e.g. one more basic land
           else alt.set(normName(rec.name), { ...infoFromRecord(rec), qty: 1 });
         }
         const what = simulate([...alt.values()], cmd, identity, { games, seed });
