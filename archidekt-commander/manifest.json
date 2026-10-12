@@ -2,7 +2,7 @@
   "manifest_version": "0.3",
   "name": "archidekt-commander",
   "display_name": "Archidekt Commander",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Veja e edite sua coleção e seus decks do Archidekt, crie e otimize decks de Commander (EDH), com nomes de cartas em português e preços em reais (LigaMagic).",
   "long_description": "Servidor MCP que conecta o Claude à sua conta do Archidekt. Lê e edita coleção e decks, valida as regras do Commander (identidade de cor garantida em toda sugestão e escrita), analisa o deck sempre do zero (nota por área, motor do plano, simulação) com opções de melhoria prontas, sugere cortes e upgrades, roda um otimizador algorítmico com simulação Monte Carlo (EDHREC só como referência), traduz nomes de cartas PT ⇄ EN, consulta preços na LigaMagic e mantém uma wiki pessoal em Markdown. Usa o Node.js que já vem com o Claude desktop: não precisa instalar nada. Sem e-mail e senha, só as ferramentas públicas funcionam.",
   "author": {
@@ -177,6 +177,30 @@
     {
       "name": "deck_simulate",
       "description": "Simulação Monte Carlo \"goldfish\" do deck (padrão 2000 partidas, semente fixa): taxa de mulligan, descida de terreno no tempo (T1–T5), mana média por turno, comandante no turno certo, ramp até o T3, ma"
+    },
+    {
+      "name": "forge_setup",
+      "description": "Instala o Java e o motor de regras Forge (para simular partidas) ou mostra o status."
+    },
+    {
+      "name": "deck_triggers",
+      "description": "Varredura de triggers e interação de um deck, uma linha por carta."
+    },
+    {
+      "name": "deck_matchups_start",
+      "description": "Simula partidas de Commander (Forge) contra decks públicos do mesmo bracket, em segundo plano."
+    },
+    {
+      "name": "deck_matchups_status",
+      "description": "Status de uma simulação de partidas ou lista das simulações."
+    },
+    {
+      "name": "deck_matchups_report",
+      "description": "Relatório da simulação: vitória, causas de derrota, MVP, cartas mortas, partidas-chave, A/B."
+    },
+    {
+      "name": "deck_matchups_stop",
+      "description": "Para uma simulação de partidas em andamento."
     }
   ],
   "keywords": [

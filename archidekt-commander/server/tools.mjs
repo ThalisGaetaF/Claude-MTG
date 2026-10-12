@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import { ArchidektError } from './client.mjs';
 import { buildInsightTools } from './tools-insight.mjs';
 import { buildOptimizeTools } from './tools-optimize.mjs';
+import { buildMatchupTools } from './tools-matchups.mjs';
 import { toEnglish } from './translate.mjs';
 import {
   cardSummary, deckUrl, descriptionText, finishToModifier, fold, formatId, formatName, frontFace,
@@ -962,5 +963,5 @@ export function buildTools(client) {
   ];
 
   const shared = { client, getDeck, ownedRecords, applyDeckChanges };
-  return [...archidektTools, ...buildInsightTools(shared), ...buildOptimizeTools(shared)];
+  return [...archidektTools, ...buildInsightTools(shared), ...buildOptimizeTools(shared), ...buildMatchupTools(shared)];
 }

@@ -2,6 +2,14 @@
 
 Plugin do Claude (Cowork / Claude desktop) que conecta o Claude à sua conta do [Archidekt](https://archidekt.com) para **ver e editar sua coleção e seus decks**, **criar decks de Commander (EDH)**, validar as regras do formato e sugerir melhorias.
 
+**Novidades da versão 0.8.0 — simulador de partidas reais (motor Forge)**
+
+- **Partidas de verdade, 4 jogadores**: o deck joga contra **decks públicos do Archidekt do mesmo bracket**, sorteados a cada simulação, no [Forge](https://github.com/Card-Forge/forge) (motor de regras open source, IA contra IA, triggers e pilha resolvidos pelo motor). Roda em segundo plano no seu PC.
+- `forge_setup` baixa o Java 21 (Temurin) e o Forge para `data/forge` (~350 MB, uma vez). `deck_matchups_start` pede o modo: **moderado** (~30 min, ~160 partidas) ou **sem limite** (até um horário, ex. `until: "07:30"`). `deck_matchups_status` acompanha; `deck_matchups_report` traz taxa de vitória com intervalo de 95%, por assento e por mesa, **por que perdeu** (morreu cedo, travou de mana, wipe sem recuperação, ficou sem gás, perdeu a corrida…), quem mata e o que mais machuca, **MVP e cartas mortas**, e partidas-chave resumidas rodada a rodada.
+- **Teste A/B de trocas** (`swaps` + `compareTo`): repete as mesmas mesas, assentos e sementes com a lista modificada e diz se a diferença é real ou "sem diferença detectável". Nada é aplicado no Archidekt.
+- `deck_triggers`: varredura de triggers/interação de um deck em código, usada pelo novo agente `mtg-opponent-profiler` (um por oponente, em paralelo) para explicar derrotas sem encher o contexto principal.
+- Filtros do sorteio: bracket declarado, 100 cartas, deck válido, Game Changers coerentes com o bracket, editado nos últimos 18 meses, comandantes diferentes do seu e entre si, todas as cartas existentes no Forge.
+
 **Novidades da versão 0.6.0 — extensão `.mcpb` (sem instalar Node)**
 
 - `manifest.json` + `.mcpbignore`: o servidor também é empacotado como extensão do Claude desktop (`.mcpb`), que roda com o Node embutido no app. E-mail, senha e pasta de dados são preenchidos na tela de configuração da extensão (senha marcada como sensível).

@@ -140,10 +140,11 @@ try {
     'deck_analyze', 'deck_cut_candidates', 'deck_upgrade_candidates',
     'wiki_list', 'wiki_read', 'wiki_write', 'wiki_search',
     'deck_triangulate', 'deck_optimize', 'deck_optimize_apply', 'deck_simulate',
+    'forge_setup', 'deck_triggers', 'deck_matchups_start', 'deck_matchups_status', 'deck_matchups_report', 'deck_matchups_stop',
   ];
-  check('tools/list exposes all 32 tools (no snapshot tools)', expected.every((n) => names.includes(n)) && names.length === expected.length, names);
+  check('tools/list exposes all 38 tools (no snapshot tools)', expected.every((n) => names.includes(n)) && names.length === expected.length, names);
   check('tool names are unique', new Set(names).size === names.length);
-  check('initialize reports version 0.7.1', init.result?.serverInfo?.version === '0.7.1', init.result?.serverInfo);
+  check('initialize reports version 0.8.0', init.result?.serverInfo?.version === '0.8.0', init.result?.serverInfo);
   check('every tool has an object inputSchema', list.result.tools.every((t) => t.inputSchema?.type === 'object'));
   // Structural JSON Schema check (draft 2020-12 subset used by MCP clients).
   const schemaErrors = [];
@@ -383,7 +384,7 @@ try {
   check('collection_remove verified', r.json?.verification === 'verified' && !state.collection.has(9004), r.text);
 
   // ---- hygiene ----
-  check('every request uses honest User-Agent', state.log.every((x) => x.ua === 'archidekt-commander-mcp/0.7'));
+  check('every request uses honest User-Agent', state.log.every((x) => x.ua === 'archidekt-commander-mcp/0.8'));
   check('auth header scheme is JWT', state.log.filter((x) => x.auth).every((x) => x.auth === 'JWT'));
   check('password never in tool output', outputs.every((t) => !t.includes(MOCK_USER.password)));
   check('password/token never in stderr', !s.stderr.includes(MOCK_USER.password) && !/eyJ[A-Za-z0-9_-]{10,}/.test(s.stderr), s.stderr);
@@ -584,6 +585,32 @@ console.log('\n# Rate limiter');
   check('cardUrl encodes apostrophe (Markdown-safe)', /card=Urza%27s%20Saga$/.test(u) && !/[()' ]/.test(u.split('card=')[1]), u);
   check('cardUrl uses front face of split/DFC', /card=Fire$/.test(liga.cardUrl('Fire // Ice')), liga.cardUrl('Fire // Ice'));
   check('cardUrl empty → null', liga.cardUrl('') === null);
+}
+
+// ======================= v0.8 (matchup simulator with Forge) =======================
+{
+  const { runPhase4 } = await import('./phase4-tests.mjs');
+  try {
+    await runPhase4({ check });
+  } catch (e) {
+    check('phase 4 crashed', false, e.stack);
+  }
+  // MCP layer: the new tools are listed and refuse to start without Forge installed.
+  const m = new McpProc(baseEnv({ ARCHIDEKT_API_BASE: base, HOME: tmpHome, USERPROFILE: tmpHome, ARCHIDEKT_HOME: path.join(tmpHome, 'p4home'), FORGE_JAVA: '', FORGE_JAR: '' }));
+  await m.init();
+  const names = (await m.rpc('tools/list')).result.tools.map((t) => t.name);
+  check('v0.8: matchup tools listed', ['forge_setup', 'deck_triggers', 'deck_matchups_start', 'deck_matchups_status', 'deck_matchups_report', 'deck_matchups_stop'].every((n) => names.includes(n)), names);
+  const st = await m.call('forge_setup', { statusOnly: true });
+  check('v0.8: forge_setup statusOnly reports not ready', st.json && st.json.ready === false && st.json.job.running === false, st.text);
+  const noForge = await m.call('deck_matchups_start', { deckId: 1002, mode: 'moderado', bracket: 2 });
+  check('v0.8: start without Forge → setup error', noForge.isError && /forge_setup/.test(noForge.text), noForge.text);
+  const noMode = await m.call('deck_matchups_start', { deckId: 1002 });
+  check('v0.8: start without mode → asks for mode', noMode.isError && /mode/.test(noMode.text), noMode.text);
+  const noJob = await m.call('deck_matchups_status', { jobId: 'nope' });
+  check('v0.8: unknown job → not found', noJob.isError && /não encontrada/.test(noJob.text), noJob.text);
+  const list = await m.call('deck_matchups_status', {});
+  check('v0.8: status without id lists jobs', list.json && Array.isArray(list.json.jobs), list.text);
+  await m.close();
 }
 
 fs.rmSync(tmpHome, { recursive: true, force: true });

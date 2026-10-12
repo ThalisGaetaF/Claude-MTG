@@ -1,6 +1,6 @@
 ---
 name: archidekt-commander
-description: "Use when the user talks about their Magic: The Gathering Commander/EDH decks, card collection, card prices or deck notes — e.g. \"melhora meu deck\", \"otimiza meu deck\", \"meu deck trava\", \"deixa o deck mais fluido\", \"simula meu deck\", \"monta um deck\", \"analisa meu deck do Omnath\", \"o que tem na minha coleção\", \"quanto custa essa carta\", \"o que eu corto\", \"valida meu deck\", \"improve my deck\", \"build a Commander deck\". Covers reading, analyzing, validating, creating and editing Archidekt decks and collection, Portuguese card names, LigaMagic prices, a fresh deck analysis with ready improvement options (deck_analyze → deck_optimize_apply), per-card evaluation, the algorithmic optimizer (deck_triangulate, deck_optimize, deck_simulate; EDHREC only as reference; color identity always enforced) and the personal wiki, through the archidekt MCP tools."
+description: "Use when the user talks about their Magic: The Gathering Commander/EDH decks, card collection, card prices or deck notes — e.g. \"melhora meu deck\", \"otimiza meu deck\", \"meu deck trava\", \"deixa o deck mais fluido\", \"simula meu deck\", \"simula partidas contra outros decks\", \"joga meu deck contra a mesa\", \"monta um deck\", \"analisa meu deck do Omnath\", \"o que tem na minha coleção\", \"quanto custa essa carta\", \"o que eu corto\", \"valida meu deck\", \"improve my deck\", \"build a Commander deck\". Covers reading, analyzing, validating, creating and editing Archidekt decks and collection, Portuguese card names, LigaMagic prices, a fresh deck analysis with ready improvement options (deck_analyze → deck_optimize_apply), per-card evaluation, the algorithmic optimizer (deck_triangulate, deck_optimize, deck_simulate; EDHREC only as reference; color identity always enforced), real 4-player matchup simulations with the Forge rules engine (forge_setup, deck_matchups_*) and the personal wiki, through the archidekt MCP tools."
 ---
 
 # Archidekt Commander
@@ -41,6 +41,21 @@ The analysis never uses earlier results about the deck: no notes from the wiki, 
 5. **Check.** Run `deck_analyze` again and show what moved (grades, simulation, roles).
 
 `deck_optimize {deckId, targetBracket?, maxSwaps=10, mode?, lock?, exclude?, checkOwned?, withPrices?}` is the global optimizer (steepest-ascent swaps on value + roles + curve + colors + consistency, checked by the goldfish). Use it when the user wants "the best overall set of swaps"; its answer carries `apply` for `deck_optimize_apply` the same way (there is no planId). `deck_triangulate` explains a single card's value in depth; `deck_simulate {remove, add}` answers "what if" questions without touching the deck.
+
+## Matchup simulation (Forge) — "simula partidas", "joga contra a mesa"
+
+Real Commander games, 4 players, full rules (Forge engine, AI vs AI), the user's deck against **public Archidekt decks of the same bracket**, drawn fresh for every simulation (never tuned against one specific deck). Volume runs in code on the user's PC; you only read summaries.
+
+1. **Engine ready?** `forge_setup {statusOnly: true}`. If `ready` is false, run `forge_setup` (downloads Java 21 + Forge, ~350 MB, background) and poll it.
+2. **Ask the mode — always, before starting:** "moderado" (~30 min, ~160 games, ±7 p.p.) or "sem_limite" (until a time the user picks — pass `until: "HH:MM"` — or ~8 h). "rapido" (~10 min) only for a smoke test. Ask the bracket if the deck has none declared.
+3. **Start.** `deck_matchups_start {deckId, mode, bracket?, until?}` → `jobId`. The opponent draw takes ~1–2 min (Archidekt rate limit); games start by themselves. In sem_limite, schedule a check-in for the chosen time instead of waiting.
+4. **Follow.** `deck_matchups_status {jobId}` (games done, seconds per game, ETA).
+5. **Read.** `deck_matchups_report {jobId}` (works mid-run): win rate with 95% interval (baseline 25% in a 4-player pod), by seat and pod, loss causes (morreu cedo, travou de mana, wipe sem recuperação, ficou sem gás, perdeu a corrida, dano de comandante…), killers and the cards that hurt most, MVP (win rate when cast vs not) and dead cards (use ÷ chance of drawing), tempo, and 3–4 **key games** with one line per round. Turn the main loss cause into testable hypotheses ("perde quando sofre wipe na R6–8 sem recarga").
+6. **Opponent profiles (optional, for explaining losses).** For each opponent deck that matters, launch the `mtg-opponent-profiler` agent with `deck_triggers {deckId}` output — one agent per deck, in parallel; never read 99-card lists in the main context.
+7. **A/B of swaps — only after the report and only if the user asks.** At most 2 packages of ≤ 4 swaps (inside color identity, from `deck_analyze` options or your hypotheses): `deck_matchups_start {deckId, mode, swaps: [{out, in}], compareTo: <base jobId>}` replays the same pods, seats and seeds. The report's `comparison` gives the win-rate difference with a 95% interval: if it crosses zero, say "sem diferença detectável" and do not recommend the swap on that basis. Nothing is applied; applying is still `deck_optimize_apply` after a "sim".
+8. **Report to the user** in the standard layout: win rate + interval, loss causes table, MVP and dead cards tables (LigaMagic links), what the key games show, limits (Forge AI pilots every deck; it underplays reactive decks), quick summary. Keep the current deck's result as the headline; swaps go in a separate table below.
+
+`deck_matchups_stop {jobId}` stops a run (finished games stay); `deck_matchups_start {resumeJobId}` resumes one interrupted by a restart.
 
 ## Quick questions
 
@@ -87,6 +102,8 @@ The analysis never uses earlier results about the deck: no notes from the wiki, 
 | Global optimizer (nothing applied) | `deck_optimize {deckId, targetBracket?, maxSwaps?, mode?, lock?, exclude?}` |
 | Apply chosen swaps | `deck_optimize_apply {deckId, swaps: [{out, in, category?}], confirm: true}` |
 | Monte Carlo goldfish / what-if | `deck_simulate {deckId, games?, remove?, add?}` |
+| Real games vs same-bracket decks (Forge) | `forge_setup`, `deck_matchups_start {deckId, mode, until?}`, `deck_matchups_status`, `deck_matchups_report`, `deck_matchups_stop` |
+| Triggers / interaction of a deck (for profiles) | `deck_triggers {deckId}` |
 | Card info (PT/EN), roles, legality | `card_lookup {name}` |
 | Find cards by role/colors/MV | `card_search_local {roles, colorIdentity, maxMv, type, text}` |
 | Translate names | `card_translate {names, to}` |

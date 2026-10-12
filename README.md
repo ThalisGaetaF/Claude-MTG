@@ -4,7 +4,7 @@ Integração do Claude com o [Archidekt](https://archidekt.com) para Magic: The 
 
 | Pasta / arquivo | O que é |
 |---|---|
-| [`archidekt-commander/`](archidekt-commander/) | O plugin do Claude (v0.6.0): servidor MCP (`server/`), skill, agente `mtg-commander-expert` e testes. Detalhes no [README do plugin](archidekt-commander/README.md). |
+| [`archidekt-commander/`](archidekt-commander/) | O plugin do Claude (v0.8.0): servidor MCP (`server/`), skill, agente `mtg-commander-expert` e testes. Detalhes no [README do plugin](archidekt-commander/README.md). |
 | [`API_SPEC.md`](API_SPEC.md) | Notas sobre a API (não oficial) do Archidekt. |
 | [`wiki/`](wiki/) | Estrutura inicial e modelo da wiki pessoal de decks. |
 | [`dist/`](dist/) | Arquivos prontos: a extensão `archidekt-commander.mcpb` e a skill `archidekt-commander-skill.zip`. |

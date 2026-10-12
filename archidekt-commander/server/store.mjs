@@ -6,8 +6,8 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-export const VERSION = '0.7.1';
-export const USER_AGENT = `archidekt-commander-mcp/0.7`;
+export const VERSION = '0.8.0';
+export const USER_AGENT = `archidekt-commander-mcp/0.8`;
 
 /**
  * Reads an environment variable, treating empty values and unreplaced placeholders

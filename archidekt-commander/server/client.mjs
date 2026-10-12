@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { envValue } from './store.mjs';
 
-export const USER_AGENT = 'archidekt-commander-mcp/0.7';
+export const USER_AGENT = 'archidekt-commander-mcp/0.8';
 const DEFAULT_BASE = 'https://archidekt.com/api';
 const TIMEOUT_MS = 20_000;
 const MAX_429_RETRIES = 2;
